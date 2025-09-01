@@ -22,6 +22,7 @@ import pydeck as pdk
 from datetime import datetime, timedelta, timezone
 from timezonefinder import TimezoneFinder
 import pytz
+import os
 
 APP_USER_AGENT = "HealthSensitiveActivityFinder/1.0 (contact: example@example.com)"
 OSM_HEADERS = {"User-Agent": APP_USER_AGENT}
@@ -124,10 +125,21 @@ def guess_timezone(lat, lon):
     return tzname
 
 def load_optional_keys():
-    owm = st.secrets.get("OWM_API_KEY", None)
-    tomorrow = st.secrets.get("TOMORROW_API_KEY", None)  # optional pollen
-    ambee = st.secrets.get("AMBEE_API_KEY", None)        # optional pollen
-    return {"owm": owm, "tomorrow": tomorrow, "ambee": ambee}
+    # Start with env vars so it works even if secrets.toml doesn't exist
+    keys = {
+        "owm": os.getenv("OWM_API_KEY"),
+        "tomorrow": os.getenv("TOMORROW_API_KEY"),
+        "ambee": os.getenv("AMBEE_API_KEY"),
+    }
+    # Try streamlit secrets if available
+    try:
+        s = st.secrets
+        keys["owm"] = s.get("OWM_API_KEY", keys["owm"])
+        keys["tomorrow"] = s.get("TOMORROW_API_KEY", keys["tomorrow"])
+        keys["ambee"] = s.get("AMBEE_API_KEY", keys["ambee"])
+    except Exception:
+        pass
+    return keys
 
 @st.cache_data(show_spinner=False, ttl=1800)
 def fetch_weather_context(lat, lon, tzname, keys):
