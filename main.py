@@ -1,5 +1,5 @@
 # app.py
-# Streamlit app: "Activity Finder — Health‑Sensitive & Low/No‑Cost"
+# Streamlit app: "Activity Finder — Health-Sensitive & Low/No-Cost"
 # Finds nearby public activities (parks, tracks, beaches, community centers, etc.)
 # while accounting for skin-cancer (UV) and lung-cancer/pollen sensitivities,
 # time of day, and weather. Shows a ranked list and a map overlay.
@@ -43,7 +43,7 @@ OWM_ONECALL_URL = "https://api.openweathermap.org/data/3.0/onecall"
 
 # Streamlit page
 st.set_page_config(
-    page_title="Activity Finder — Health‑Sensitive",
+    page_title="Activity Finder — Health-Sensitive",
     page_icon="🧭",
     layout="wide",
 )
@@ -503,7 +503,7 @@ def format_window_str(windows):
 # UI
 # -----------------------------
 
-st.title("🧭 Activity Finder — Health‑Sensitive & Low/No‑Cost")
+st.title("🧭 Activity Finder — Health-Sensitive & Low/No-Cost")
 st.caption(
     "Find nearby activity options (parks, tracks, beaches, community centers, etc.) that respect sun/UV and pollen sensitivities, with a list and map."
 )
@@ -522,8 +522,33 @@ with col3:
 with col4:
     run = st.button("Search", type="primary", use_container_width=True)
 
+# Optional: Filters & API keys expander (defines kind_filters)
+with st.expander("Filters & API keys (optional)"):
+    kind_filters = st.multiselect(
+        "Show only these kinds",
+        [
+            "Park",
+            "Community center",
+            "Swimming (pool)",
+            "Playground / fitness area",
+            "Outdoor fitness station",
+            "Running track",
+            "Boardwalk / beach / pier",
+            "Open sports field",
+            "Recreation ground",
+            "Ice rink",
+            "Sports centre",
+            "Cycleway / greenway",
+        ],
+    )
+    st.write("Add the following keys to `.streamlit/secrets.toml` if desired:")
+    st.code("""OWM_API_KEY = "..."   # OpenWeatherMap for UV + hourly precip
+TOMORROW_API_KEY = "..."  # optional pollen
+AMBEE_API_KEY = "..."     # optional pollen
+""", language="bash")
+
 if not run:
-    st.info("Enter your area in the sidebar and click **Find activities**.")
+    st.info("Enter your area above and press **Search**.")
     st.stop()
 
 if not address.strip():
@@ -563,7 +588,7 @@ with colA:
 
 with colB:
     st.subheader("Public resources nearby")
-    with st.spinner("Querying OpenStreetMap for low/no‑cost places..."):
+    with st.spinner("Querying OpenStreetMap for low/no-cost places..."):
         df = fetch_overpass(lat, lon, radius_km)
 
     if df.empty:
@@ -580,7 +605,7 @@ with colB:
     features = pd.DataFrame(feats)
 
     # Optional filter by kind
-    if kind_filters:
+    if "kind_filters" in locals() and kind_filters:
         features = features[features["kind"].isin(kind_filters)].reset_index(drop=True)
         if features.empty:
             st.warning("No places match those filters. Clear filters to see all.")
@@ -595,9 +620,9 @@ with colB:
                     "indoor" if r["indoor"] else None,
                     "shaded" if r["shaded_possible"] else None,
                     "waterfront" if r["waterfront"] else None,
-                    "low‑pollen"
+                    "low-pollen"
                     if r["pollen_risk"] == "low"
-                    else ("higher‑pollen" if r["pollen_risk"] == "higher" else None),
+                    else ("higher-pollen" if r["pollen_risk"] == "higher" else None),
                 ]
                 if b
             ]
@@ -691,4 +716,3 @@ st.markdown("---")
 st.write(
     "Data © OpenStreetMap contributors. Weather via OpenWeatherMap (if key provided). This tool provides general guidance — always follow your clinician’s advice."
 )
-
