@@ -1,7 +1,5 @@
 # app.py
 # Activity Finder — Sensitivity-aware + Community (Profiles, Groups, Outings)
-# Public places from OpenStreetMap; optional weather from OWM.
-# Adds accounts, profiles, groups, and outings using a local SQLite DB.
 
 import math
 import time
@@ -29,7 +27,8 @@ NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 OWM_ONECALL_URL = "https://api.openweathermap.org/data/3.0/onecall"
 
-DB_PATH = "data.db"
+DB_PATH = os.getenv("APP_DB_PATH", "data.db")
+os.makedirs(os.path.dirname(DB_PATH) or ".", exist_ok=True)
 
 st.set_page_config(page_title="Activity Finder — Sensitivity-aware + Community", page_icon="🧭", layout="wide")
 
@@ -46,6 +45,14 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
+# Safe rerun helper (handles old/new Streamlit versions)
+def _safe_rerun():
+    try:
+        st.rerun()
+    except Exception:
+        # Fallback for older Streamlit
+        st.experimental_rerun()
 
 # -----------------------------
 # HTTP session (polite retries)
@@ -88,8 +95,8 @@ def init_db():
             pw_hash TEXT NOT NULL,
             salt TEXT NOT NULL,
             bio TEXT,
-            sensitivities TEXT,   -- JSON array
-            activities TEXT,      -- JSON array
+            sensitivities TEXT,
+            activities TEXT,
             created_at TEXT NOT NULL
         );
 
@@ -98,7 +105,7 @@ def init_db():
             name TEXT NOT NULL,
             description TEXT,
             city TEXT,
-            tags TEXT,            -- JSON array
+            tags TEXT,
             owner_id INTEGER NOT NULL,
             visibility TEXT DEFAULT 'public',
             created_at TEXT NOT NULL,
@@ -108,7 +115,7 @@ def init_db():
         CREATE TABLE IF NOT EXISTS group_members (
             group_id INTEGER NOT NULL,
             user_id INTEGER NOT NULL,
-            role TEXT DEFAULT 'member',  -- owner|admin|member
+            role TEXT DEFAULT 'member',
             joined_at TEXT NOT NULL,
             PRIMARY KEY (group_id, user_id),
             FOREIGN KEY(group_id) REFERENCES groups(id),
@@ -133,7 +140,7 @@ def init_db():
         CREATE TABLE IF NOT EXISTS rsvps (
             outing_id INTEGER NOT NULL,
             user_id INTEGER NOT NULL,
-            status TEXT NOT NULL,  -- going|maybe|not_going
+            status TEXT NOT NULL,
             responded_at TEXT NOT NULL,
             PRIMARY KEY (outing_id, user_id),
             FOREIGN KEY(outing_id) REFERENCES outings(id),
@@ -200,8 +207,10 @@ def create_group(name, description, city, tags, owner_id, visibility="public"):
         (name, description, city, json.dumps(tags), owner_id, visibility, now_iso()),
     )
     gid = cur.lastrowid
-    cur.execute("INSERT OR IGNORE INTO group_members (group_id, user_id, role, joined_at) VALUES (?, ?, ?, ?)",
-                (gid, owner_id, "owner", now_iso()))
+    cur.execute(
+        "INSERT OR IGNORE INTO group_members (group_id, user_id, role, joined_at) VALUES (?, ?, ?, ?)",
+        (gid, owner_id, "owner", now_iso()),
+    )
     conn.commit()
     conn.close()
     return gid
@@ -210,9 +219,14 @@ def list_groups(search=""):
     conn = db()
     cur = conn.cursor()
     if search.strip():
-        cur.execute("SELECT g.*, u.username AS owner_name FROM groups g JOIN users u ON u.id=g.owner_id WHERE g.name LIKE ? ORDER BY g.created_at DESC", (f"%{search}%",))
+        cur.execute(
+            "SELECT g.*, u.username AS owner_name FROM groups g JOIN users u ON u.id=g.owner_id WHERE g.name LIKE ? ORDER BY g.created_at DESC",
+            (f"%{search}%",),
+        )
     else:
-        cur.execute("SELECT g.*, u.username AS owner_name FROM groups g JOIN users u ON u.id=g.owner_id ORDER BY g.created_at DESC")
+        cur.execute(
+            "SELECT g.*, u.username AS owner_name FROM groups g JOIN users u ON u.id=g.owner_id ORDER BY g.created_at DESC"
+        )
     rows = [dict(r) for r in cur.fetchall()]
     conn.close()
     return rows
@@ -642,14 +656,21 @@ def format_window_str(windows):
 # -----------------------------
 # UI — Tabs
 # -----------------------------
-init_db()
+try:
+    init_db()
+except Exception as e:
+    st.error(f"Database init failed: {e}")
+    st.stop()
+
 if "user_id" not in st.session_state:
     st.session_state.user_id = None
+if "view_group_id" not in st.session_state:
+    st.session_state.view_group_id = None
 
 tab_explore, tab_community = st.tabs(["🗺️ Explore", "👥 Community"])
 
 # ============================================================
-# EXPLORE TAB (the search you already had, trimmed for brevity)
+# EXPLORE TAB
 # ============================================================
 with tab_explore:
     st.markdown("### 🔍 Search near you")
@@ -828,12 +849,15 @@ with tab_community:
                 li_pw = st.text_input("Password", type="password")
                 li_go = st.form_submit_button("Log in")
             if li_go:
-                uid = authenticate(li_user.strip(), li_pw)
-                if uid:
-                    st.session_state.user_id = uid
-                    st.experimental_rerun()
-                else:
-                    st.error("Invalid username or password.")
+                try:
+                    uid = authenticate(li_user.strip(), li_pw)
+                    if uid:
+                        st.session_state.user_id = uid
+                        _safe_rerun()
+                    else:
+                        st.error("Invalid username or password.")
+                except Exception as e:
+                    st.error(f"Login failed: {e}")
 
         with colR:
             st.subheader("Sign up")
@@ -844,18 +868,20 @@ with tab_community:
                 su_pw2 = st.text_input("Confirm password", type="password")
                 su_go = st.form_submit_button("Create account")
             if su_go:
-                if su_pw1 != su_pw2:
-                    st.error("Passwords do not match.")
-                elif not su_user.strip():
-                    st.error("Username required.")
-                else:
-                    try:
+                try:
+                    if su_pw1 != su_pw2:
+                        st.error("Passwords do not match.")
+                    elif not su_user.strip():
+                        st.error("Username required.")
+                    else:
                         uid = create_user(su_user.strip(), su_email.strip() or None, su_pw1)
                         st.session_state.user_id = uid
                         st.success("Welcome! Account created.")
-                        st.experimental_rerun()
-                    except sqlite3.IntegrityError:
-                        st.error("Username or email already exists.")
+                        _safe_rerun()
+                except sqlite3.IntegrityError:
+                    st.error("Username or email already exists.")
+                except Exception as e:
+                    st.error(f"Sign up failed: {e}")
         st.stop()
 
     # --- Logged in
@@ -863,7 +889,7 @@ with tab_community:
     st.success(f"Logged in as **{me['username']}**")
     if st.button("Log out"):
         st.session_state.user_id = None
-        st.experimental_rerun()
+        _safe_rerun()
 
     # --- Profile
     st.subheader("Your profile")
@@ -910,7 +936,7 @@ with tab_community:
                         if st.button("Join", key=f"join_g_{g['id']}"):
                             join_group(g["id"], me["id"])
                             st.success("Joined group.")
-                            st.experimental_rerun()
+                            _safe_rerun()
                     else:
                         st.caption("You are a member")
                 with jcols[2]:
@@ -918,7 +944,7 @@ with tab_community:
                         if st.button("Leave", key=f"leave_g_{g['id']}"):
                             leave_group(g["id"], me["id"])
                             st.warning("Left group.")
-                            st.experimental_rerun()
+                            _safe_rerun()
 
     with gR:
         st.caption("Create a new group")
@@ -937,7 +963,7 @@ with tab_community:
                 join_group(gid, me["id"], role="owner")
                 st.success("Group created.")
                 st.session_state["view_group_id"] = gid
-                st.experimental_rerun()
+                _safe_rerun()
 
         # My groups quick list
         st.caption("Your groups")
@@ -965,7 +991,6 @@ with tab_community:
                 if not outings:
                     st.info("No outings yet. Be the first to create one!")
                 else:
-                    # Simple list + RSVP buttons
                     for o in outings:
                         with st.container(border=True):
                             local_tz = pytz.timezone(guess_timezone(o["lat"], o["lon"])) if (o["lat"] and o["lon"]) else pytz.timezone("America/New_York")
@@ -980,13 +1005,13 @@ with tab_community:
                                 b1, b2, b3 = st.columns(3)
                                 with b1:
                                     if st.button("I'm going", key=f"go_{o['id']}"):
-                                        rsvp(o["id"], me["id"], "going"); st.experimental_rerun()
+                                        rsvp(o["id"], me["id"], "going"); _safe_rerun()
                                 with b2:
                                     if st.button("Maybe", key=f"maybe_{o['id']}"):
-                                        rsvp(o["id"], me["id"], "maybe"); st.experimental_rerun()
+                                        rsvp(o["id"], me["id"], "maybe"); _safe_rerun()
                                 with b3:
                                     if st.button("Not going", key=f"ng_{o['id']}"):
-                                        rsvp(o["id"], me["id"], "not_going"); st.experimental_rerun()
+                                        rsvp(o["id"], me["id"], "not_going"); _safe_rerun()
                             else:
                                 st.caption("Join this group to RSVP.")
 
@@ -1020,9 +1045,9 @@ with tab_community:
                             dt_local = datetime.combine(t_date, t_time)
                             dt_local = tz.localize(dt_local)
                             time_utc = dt_local.astimezone(pytz.utc).isoformat()
-                            oid = create_outing(g["id"], t_title.strip(), time_utc, loc_o, lat_o, lon_o, (int(t_max) or None), t_notes.strip(), me["id"])
+                            _ = create_outing(g["id"], t_title.strip(), time_utc, loc_o, lat_o, lon_o, (int(t_max) or None), t_notes.strip(), me["id"])
                             st.success("Outing created.")
-                            st.experimental_rerun()
+                            _safe_rerun()
 
             # Map of group outings (if any have coords)
             coords = [o for o in list_outings(g["id"]) if o.get("lat") and o.get("lon")]
@@ -1035,7 +1060,6 @@ with tab_community:
                     "when": o["time_utc"],
                     "where": o.get("location_name") or "",
                 } for o in coords])
-                # ensure JSON-safe
                 map_df["tooltip"] = map_df.apply(lambda r: f"{r['name']}\n{r['where']}\n{r['when']}", axis=1)
                 center_lat = float(sum(map_df["lat"])/len(map_df))
                 center_lon = float(sum(map_df["lon"])/len(map_df))
