@@ -609,23 +609,51 @@ with colB:
     st.download_button("Download results (CSV)", csv, "activities.csv", "text/csv")
 
 # -----------------------------
-# Map
+# Map (JSON-safe)
 # -----------------------------
 st.subheader("Map")
-map_df = features.copy()
-map_df["tooltip"] = map_df.apply(
-    lambda r: (
-        f"{r['name']} — {r['kind']}\n"
-        f"Activities: {r['activities_list']}\n"
-        f"Attributes: {(r['badges'] or 'public')}\n"
-        f"{r['distance_km']:.2f} km away | "
-        f"Road: {('—' if pd.isna(r['road_distance_m']) else str(int(r['road_distance_m']))+' m')}\n"
-        f"Score: {r['score']}"
-    ),
-    axis=1,
-)
 
-initial_view = pdk.ViewState(latitude=lat, longitude=lon, zoom=12, pitch=0)
+# Build a minimal, serializable frame for pydeck
+# Keep only primitives (float/int/str), no sets/dicts/objects
+_safe_cols = ["lat", "lon", "name", "distance_km", "score"]
+if "road_distance_m" in features.columns:
+    _safe_cols.append("road_distance_m")
+if "activities_list" in features.columns:
+    _safe_cols.append("activities_list")
+if "badges" in features.columns:
+    _safe_cols.append("badges")
+
+map_df = features[_safe_cols].copy()
+
+# Make sure numbers are native Python floats/ints and strings are strings
+map_df["lat"] = map_df["lat"].astype(float)
+map_df["lon"] = map_df["lon"].astype(float)
+map_df["distance_km"] = map_df["distance_km"].astype(float)
+map_df["score"] = map_df["score"].astype(float)
+if "road_distance_m" in map_df:
+    map_df["road_distance_m"] = map_df["road_distance_m"].apply(
+        lambda x: None if pd.isna(x) else float(x)
+    )
+for c in ["name", "activities_list", "badges"]:
+    if c in map_df:
+        map_df[c] = map_df[c].astype(str)
+
+# Tooltip text (all strings)
+def _fmt_tooltip(r):
+    rd = "—" if (pd.isna(r.get("road_distance_m")) or r.get("road_distance_m") is None) else f"{int(r['road_distance_m'])} m"
+    acts = r.get("activities_list", "—")
+    badges = r.get("badges", "public")
+    return (
+        f"{r['name']} — score {r['score']:.0f}\n"
+        f"Activities: {acts}\n"
+        f"Attributes: {badges}\n"
+        f"{r['distance_km']:.2f} km away | Road: {rd}"
+    )
+
+map_df["tooltip"] = map_df.apply(_fmt_tooltip, axis=1)
+
+initial_view = pdk.ViewState(latitude=float(lat), longitude=float(lon), zoom=12, pitch=0)
+
 layer_points = pdk.Layer(
     "ScatterplotLayer",
     data=map_df,
@@ -635,16 +663,18 @@ layer_points = pdk.Layer(
     radius_min_pixels=6,
     radius_max_pixels=40,
 )
+
 layer_text = pdk.Layer(
     "TextLayer",
     data=map_df,
     get_position='[lon, lat]',
     get_text="name",
     get_size=12,
-    get_alignment_baseline='"bottom"',
+    get_alignment_baseline='"bottom"',  # keep as a literal string
 )
-# search radius ring
-circle_data = pd.DataFrame([{"lat": lat, "lon": lon, "r": radius_km * 1000}])
+
+# A faint ring to visualize the search radius
+circle_data = pd.DataFrame([{"lat": float(lat), "lon": float(lon), "r": float(radius_km) * 1000.0}])
 layer_center = pdk.Layer(
     "ScatterplotLayer",
     data=circle_data,
@@ -656,13 +686,15 @@ layer_center = pdk.Layer(
     filled=False,
     line_width_min_pixels=1,
 )
-r = pdk.Deck(
+
+deck = pdk.Deck(
     map_style=None,
     initial_view_state=initial_view,
     layers=[layer_center, layer_points, layer_text],
     tooltip={"text": "{tooltip}"},
 )
-st.pydeck_chart(r)
+st.pydeck_chart(deck)
+
 
 st.caption("Pro tips: Use **Include/Exclude** to dial in things like *Museums* or *Botanical gardens*, and *Free/Paid*. For **Smog/Noise**, look for *away from traffic*; for **Accessibility**, prefer *wheelchair* and *paved*.")
 
