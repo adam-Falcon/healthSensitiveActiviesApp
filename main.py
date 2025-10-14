@@ -47,6 +47,16 @@ st.set_page_config(
     page_icon="🧭",
     layout="wide",
 )
+st.markdown(
+    """
+    <style>
+    div[data-testid="column"] > div:has(input), div[data-testid="column"] > div:has(button) {
+        margin-top: 0 !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 # -----------------------------
 # HTTP Session with Retry/Backoff
@@ -498,49 +508,19 @@ st.caption(
     "Find nearby activity options (parks, tracks, beaches, community centers, etc.) that respect sun/UV and pollen sensitivities, with a list and map."
 )
 
-with st.sidebar:
-    st.header("Your area & preferences")
-    address = st.text_input(
-        "City / address / ZIP", value="Portland, ME", placeholder="e.g., 02139 or 'Portland, ME'"
-    )
-    radius_km = st.slider("Search radius (km)", 2, 30, 10, 1)
+# --- Horizontal search bar
+st.markdown("### 🔍 Find activities near you")
 
-    st.divider()
-    st.subheader("Health sensitivities")
-    skin_sensitive = st.checkbox(
-        "Skin cancer / UV sensitive (avoid strong sun)", value=True
-    )
-    lung_sensitive = st.checkbox(
-        "Lung cancer / pollen sensitive (avoid polleny areas)", value=True
-    )
-
-    st.divider()
-    st.subheader("Filters")
-    kind_filters = st.multiselect(
-        "Show only these kinds (optional)",
-        [
-            "Park",
-            "Community center",
-            "Swimming (pool)",
-            "Playground / fitness area",
-            "Outdoor fitness station",
-            "Running track",
-            "Boardwalk / beach / pier",
-            "Open sports field",
-            "Recreation ground",
-            "Ice rink",
-            "Sports centre",
-            "Cycleway / greenway",
-        ],
-    )
-
-    st.divider()
-    with st.expander("Optional API keys (set in `.streamlit/secrets.toml`)"):
-        st.write("• OpenWeatherMap → `OWM_API_KEY` (for UV + hourly precip)")
-        st.write("• Tomorrow.io → `TOMORROW_API_KEY` (pollen; not required)")
-        st.write("• Ambee → `AMBEE_API_KEY` (pollen; not required)")
-
-    run = st.button("Find activities", type="primary")
+col1, col2, col3, col4 = st.columns([3, 1.5, 1.5, 1])
+with col1:
+    address = st.text_input("City / address / ZIP", value="Portland, ME", label_visibility="collapsed", placeholder="e.g., 02139 or 'Portland, ME'")
+with col2:
+    radius_km = st.slider("Radius (km)", 2, 30, 10, 1, label_visibility="collapsed")
+with col3:
+    skin_sensitive = st.checkbox("☀️ UV-sensitive", value=True)
+    lung_sensitive = st.checkbox("🌸 Pollen-sensitive", value=True)
+with col4:
+    run = st.button("Search", type="primary", use_container_width=True)
 
 if not run:
     st.info("Enter your area in the sidebar and click **Find activities**.")
