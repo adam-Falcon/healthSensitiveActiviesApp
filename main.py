@@ -14,37 +14,86 @@
 import math
 import time
 import json
-import requests
-import pandas as pd
-import numpy as np
-import streamlit as st
-import pydeck as pdk
-from datetime import datetime, timedelta, timezone
-from timezonefinder import TimezoneFinder
-import pytz
 import os
+from datetime import datetime, timedelta, timezone
 
-APP_USER_AGENT = "HealthSensitiveActivityFinder/1.0 (contact: example@example.com)"
-OSM_HEADERS = {"User-Agent": APP_USER_AGENT}
+import numpy as np
+import pandas as pd
+import pydeck as pdk
+import pytz
+import requests
+import streamlit as st
+from requests.adapters import HTTPAdapter, Retry
+from timezonefinder import TimezoneFinder
+
+# -----------------------------
+# Global Config / Constants
+# -----------------------------
+
+APP_USER_AGENT = (
+    "HealthSensitiveActivityFinder/1.1 (contact: contact@example.com)"
+)
+OSM_HEADERS = {
+    "User-Agent": APP_USER_AGENT,
+    "Accept-Language": "en",
+}
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
+OWM_ONECALL_URL = "https://api.openweathermap.org/data/3.0/onecall"
 
-# ----------- Helpers
+# Streamlit page
+st.set_page_config(
+    page_title="Activity Finder — Health‑Sensitive",
+    page_icon="🧭",
+    layout="wide",
+)
+
+# -----------------------------
+# HTTP Session with Retry/Backoff
+# -----------------------------
+
+_session = None
+
+
+def http():
+    """Singleton requests.Session configured with polite retries for public APIs."""
+    global _session
+    if _session is None:
+        _session = requests.Session()
+        retries = Retry(
+            total=4,
+            backoff_factor=1.2,
+            status_forcelist=(429, 500, 502, 503, 504),
+            allowed_methods=("GET", "POST"),
+            respect_retry_after_header=True,
+        )
+        _session.headers.update(OSM_HEADERS)
+        _session.mount("https://", HTTPAdapter(max_retries=retries))
+        _session.mount("http://", HTTPAdapter(max_retries=retries))
+    return _session
+
+
+# -----------------------------
+# Helpers
+# -----------------------------
 
 def haversine_km(lat1, lon1, lat2, lon2):
     R = 6371.0
     phi1, phi2 = math.radians(lat1), math.radians(lat2)
     dphi = math.radians(lat2 - lat1)
     dlambda = math.radians(lon2 - lon1)
-    a = (math.sin(dphi/2)**2 +
-         math.cos(phi1)*math.cos(phi2)*math.sin(dlambda/2)**2)
+    a = (
+        math.sin(dphi / 2) ** 2
+        + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
+    )
     return 2 * R * math.asin(math.sqrt(a))
+
 
 @st.cache_data(show_spinner=False, ttl=3600)
 def geocode_address(q):
     """Use Nominatim to geocode a free-form address/city/ZIP."""
     params = {"q": q, "format": "json", "limit": 1}
-    r = requests.get(NOMINATIM_URL, params=params, headers=OSM_HEADERS, timeout=30)
+    r = http().get(NOMINATIM_URL, params=params, timeout=30)
     r.raise_for_status()
     js = r.json()
     if not js:
@@ -53,13 +102,14 @@ def geocode_address(q):
     return {
         "lat": float(item["lat"]),
         "lon": float(item["lon"]),
-        "display_name": item.get("display_name",""),
+        "display_name": item.get("display_name", ""),
     }
+
 
 def build_overpass_query(lat, lon, radius_m):
     # Collect low/no cost public resources commonly suitable for physical activity
     # We ask for nodes/ways/relations and request center geometry for ways/relations.
-    leisure = r'park|pitch|track|fitness_station|playground|sports_centre|recreation_ground|ice_rink|swimming_pool'
+    leisure = r"park|pitch|track|fitness_station|playground|sports_centre|recreation_ground|ice_rink|swimming_pool"
     query = f"""
     [out:json][timeout:30];
     (
@@ -87,11 +137,13 @@ def build_overpass_query(lat, lon, radius_m):
     """
     return query
 
+
 @st.cache_data(show_spinner=False, ttl=1800)
 def fetch_overpass(lat, lon, radius_km):
     radius_m = int(radius_km * 1000)
     q = build_overpass_query(lat, lon, radius_m)
-    r = requests.post(OVERPASS_URL, data=q, headers=OSM_HEADERS, timeout=60)
+    time.sleep(0.7)  # be courteous to Overpass
+    r = http().post(OVERPASS_URL, data=q, timeout=60)
     r.raise_for_status()
     js = r.json()
     elements = js.get("elements", [])
@@ -106,16 +158,27 @@ def fetch_overpass(lat, lon, radius_km):
         if lat2 is None or lon2 is None:
             continue
         dist = haversine_km(lat, lon, lat2, lon2)
-        name = tags.get("name") or tags.get("leisure") or tags.get("amenity") or tags.get("tourism") or tags.get("man_made") or "Unnamed"
-        rows.append({
-            "id": f'{el.get("type","")}/{el.get("id","")}',
-            "name": name,
-            "lat": lat2, "lon": lon2,
-            "distance_km": dist,
-            "tags": tags
-        })
+        name = (
+            tags.get("name")
+            or tags.get("leisure")
+            or tags.get("amenity")
+            or tags.get("tourism")
+            or tags.get("man_made")
+            or "Unnamed"
+        )
+        rows.append(
+            {
+                "id": f'{el.get("type","")}/{el.get("id","")}',
+                "name": name,
+                "lat": lat2,
+                "lon": lon2,
+                "distance_km": dist,
+                "tags": tags,
+            }
+        )
     df = pd.DataFrame(rows).sort_values("distance_km").reset_index(drop=True)
     return df
+
 
 def guess_timezone(lat, lon):
     tf = TimezoneFinder()
@@ -123,6 +186,7 @@ def guess_timezone(lat, lon):
     if not tzname:
         tzname = "America/New_York"
     return tzname
+
 
 def load_optional_keys():
     # Start with env vars so it works even if secrets.toml doesn't exist
@@ -141,6 +205,7 @@ def load_optional_keys():
         pass
     return keys
 
+
 @st.cache_data(show_spinner=False, ttl=1800)
 def fetch_weather_context(lat, lon, tzname, keys):
     """Fetch daily UV (approx), hourly precip, and build 'safer' hourly windows.
@@ -152,15 +217,17 @@ def fetch_weather_context(lat, lon, tzname, keys):
     context = {
         "tzname": tzname,
         "date": str(today_local),
-        "hourly": [],  # list of dicts: {"time": dt, "uvi_est": x, "rain": bool}
+        "hourly": [],  # list of dicts: {"time": dt, "uvi": x, "rain": bool}
         "daily_uvi": None,
         "notes": [],
-        "windows": []  # list of (start_dt, end_dt) local
+        "windows": [],  # list of (start_dt, end_dt) local
     }
 
     # Build 6am-9pm schedule baseline (local)
-    base_hours = [tz.localize(datetime.combine(today_local, datetime.min.time()) + timedelta(hours=h))
-                  for h in range(6, 22)]
+    base_hours = [
+        tz.localize(datetime.combine(today_local, datetime.min.time()) + timedelta(hours=h))
+        for h in range(6, 22)
+    ]
 
     # Defaults/heuristics
     def heuristic_uv(hour):
@@ -176,35 +243,44 @@ def fetch_weather_context(lat, lon, tzname, keys):
     # Try OpenWeatherMap for real weather/precip (and daily UVI)
     if keys.get("owm"):
         try:
-            url = "https://api.openweathermap.org/data/3.0/onecall"
-            params = dict(lat=lat, lon=lon, units="metric", appid=keys["owm"], exclude="minutely,alerts")
-            r = requests.get(url, params=params, timeout=30)
+            params = dict(
+                lat=lat,
+                lon=lon,
+                units="metric",
+                appid=keys["owm"],
+                exclude="minutely,alerts",
+            )
+            r = http().get(OWM_ONECALL_URL, params=params, timeout=30)
             r.raise_for_status()
             w = r.json()
-            # Hourly precip (pop or rain)
-            o_tz_offset = w.get("timezone_offset", 0)
-            # Map OWM hourly times to local
+
+            # Hourly precip proxy (pop or rain) for today
             o_hourly = w.get("hourly", [])
-            # Build dict by local hour for today
             rain_hours_local = set()
             for h in o_hourly[:24]:
                 dt_utc = datetime.fromtimestamp(h["dt"], tz=timezone.utc)
                 dt_local = dt_utc.astimezone(tz)
-                if dt_local.date() == today_local and (("rain" in h and h["rain"]) or (h.get("pop",0) >= 0.5 and h.get("clouds",0) >= 70)):
+                if dt_local.date() == today_local and (
+                    ("rain" in h and h["rain"]) or (h.get("pop", 0) >= 0.5 and h.get("clouds", 0) >= 70)
+                ):
                     rain_hours_local.add(dt_local.hour)
             for rec in hourly:
                 if rec["time"].hour in rain_hours_local:
                     rec["rain"] = True
+
             # Daily UVI approx (max)
             if w.get("daily"):
                 context["daily_uvi"] = w["daily"][0].get("uvi")
                 context["notes"].append(f"Daily max UV index (forecast): {context['daily_uvi']}")
-        except Exception as e:
-            context["notes"].append("Weather API failed — using heuristics.")
+        except Exception:
+            context["notes"].append(
+                "OpenWeatherMap unavailable or key missing — using heuristic UV and rain estimates."
+            )
 
     context["hourly"] = hourly
 
     return context
+
 
 def contiguous_windows(times, good_mask):
     """Group contiguous True values in mask into windows of (start_idx, end_idx)."""
@@ -213,18 +289,22 @@ def contiguous_windows(times, good_mask):
     for i, good in enumerate(good_mask):
         if good and start is None:
             start = i
-        if (not good or i == len(good_mask)-1) and start is not None:
-            end = i if good else i-1
+        if (not good or i == len(good_mask) - 1) and start is not None:
+            end = i if good else i - 1
             windows.append((start, end))
             start = None
     return windows
 
+
 def pretty_time(dt):
-    return dt.strftime("%-I:%M %p")
+    try:
+        return dt.strftime("%-I:%M %p")
+    except ValueError:
+        return dt.strftime("%I:%M %p").lstrip("0")
+
 
 def classify_feature(row):
     tags = row.get("tags", {})
-    name = row.get("name","Unnamed")
     kind = None
     indoor = False
     shaded_possible = False
@@ -269,7 +349,7 @@ def classify_feature(row):
         kind = "Ice rink"
         indoor = tags.get("indoor") == "yes"
         pollen_risk = "low" if indoor else "medium"
-    elif tags.get("sports_centre") or tags.get("leisure") == "sports_centre":
+    elif tags.get("leisure") == "sports_centre":
         kind = "Sports centre"
         indoor = tags.get("indoor") == "yes" or tags.get("covered") == "yes"
         pollen_risk = "low" if indoor else "medium"
@@ -278,19 +358,28 @@ def classify_feature(row):
         pollen_risk = "medium"
     else:
         # Default fallback
-        kind = tags.get("leisure") or tags.get("amenity") or tags.get("tourism") or tags.get("man_made") or "Public place"
+        kind = (
+            tags.get("leisure")
+            or tags.get("amenity")
+            or tags.get("tourism")
+            or tags.get("man_made")
+            or "Public place"
+        )
 
     return {
-        "kind": kind, "indoor": indoor,
-        "shaded_possible": shaded_possible, "waterfront": waterfront,
-        "pollen_risk": pollen_risk
+        "kind": kind,
+        "indoor": indoor,
+        "shaded_possible": shaded_possible,
+        "waterfront": waterfront,
+        "pollen_risk": pollen_risk,
     }
+
 
 def score_feature(feat, prefs, distance_km):
     # Base score: closer is better
     score = max(0, 100 - distance_km * 8)
 
-    # Indoor strongly preferred for both sensitivities
+    # UV sensitivity
     if prefs["skin_sensitive"]:
         if feat["indoor"]:
             score += 25
@@ -298,7 +387,10 @@ def score_feature(feat, prefs, distance_km):
             score += 12
         if feat["waterfront"]:
             score += 5  # breeze + often overcast near water
-        # Slight penalty to open fields at midday (handled later in time windows)
+        if feat["kind"] in ["Open sports field", "Running track"]:
+            score -= 4  # direct sun likely
+
+    # Lung/pollen sensitivity
     if prefs["lung_sensitive"]:
         if feat["indoor"]:
             score += 25
@@ -310,15 +402,22 @@ def score_feature(feat, prefs, distance_km):
             score += 8
 
     # Generic: parks and public places are free — small boost
-    if feat["kind"] in ["Park", "Cycleway / greenway", "Running track", "Boardwalk / beach / pier", "Recreation ground", "Outdoor fitness station"]:
+    if feat["kind"] in [
+        "Park",
+        "Cycleway / greenway",
+        "Running track",
+        "Boardwalk / beach / pier",
+        "Recreation ground",
+        "Outdoor fitness station",
+    ]:
         score += 6
 
     return round(score, 1)
 
+
 def build_time_windows(weather_ctx, prefs):
     """Return recommended windows for today as a list of (start_dt, end_dt, reason)."""
     hourly = weather_ctx["hourly"]
-    tz = pytz.timezone(weather_ctx["tzname"])
 
     # Risk model per hour (lower is better)
     risks = []
@@ -327,11 +426,13 @@ def build_time_windows(weather_ctx, prefs):
         risk = 0
         # Skin sensitivity -> UV heuristic by hour (or daily uvi hint)
         if prefs["skin_sensitive"]:
-            # base from heuristic uv embedded in rec["uvi"]
             uv = rec.get("uvi", 2)
-            if uv >= 7: risk += 3
-            elif uv >= 4: risk += 2
-            else: risk += 1
+            if uv >= 7:
+                risk += 3
+            elif uv >= 4:
+                risk += 2
+            else:
+                risk += 1
         # Lung/pollen sensitivity -> avoid peak pollen hours (5–10am, 4–8pm), reduce if rain
         if prefs["lung_sensitive"]:
             if 5 <= h <= 10 or 16 <= h <= 20:
@@ -341,7 +442,6 @@ def build_time_windows(weather_ctx, prefs):
             if rec.get("rain"):
                 risk -= 1  # rain suppresses pollen
 
-        # General weather comfort could be considered here (temp/wind if fetched)
         risks.append(max(0, risk))
 
     # Good hours have risk <= 2 (tuneable)
@@ -356,47 +456,89 @@ def build_time_windows(weather_ctx, prefs):
         if prefs["skin_sensitive"]:
             reason_parts.append("lower UV")
         if prefs["lung_sensitive"]:
-            reason_parts.append("lower pollen (est.)" + (" after rain" if any(hourly[i].get("rain") for i in range(start_i, end_i+1)) else ""))
+            reason_parts.append(
+                "lower pollen (est.)"
+                + (
+                    " after rain"
+                    if any(hourly[i].get("rain") for i in range(start_i, end_i + 1))
+                    else ""
+                )
+            )
         reason = ", ".join(reason_parts) if reason_parts else "comfortable"
         windows.append((start, end, reason))
 
     # If we found nothing, fall back to traditional safe windows
     if not windows:
+        tz = pytz.timezone(weather_ctx["tzname"])
         today = hourly[0]["time"].date()
         start1 = tz.localize(datetime.combine(today, datetime.min.time()) + timedelta(hours=6))
-        end1   = tz.localize(datetime.combine(today, datetime.min.time()) + timedelta(hours=9))
+        end1 = tz.localize(datetime.combine(today, datetime.min.time()) + timedelta(hours=9))
         start2 = tz.localize(datetime.combine(today, datetime.min.time()) + timedelta(hours=18))
-        end2   = tz.localize(datetime.combine(today, datetime.min.time()) + timedelta(hours=21))
-        windows = [(start1, end1, "early morning (heuristic)"),
-                   (start2, end2, "evening (heuristic)")]
+        end2 = tz.localize(datetime.combine(today, datetime.min.time()) + timedelta(hours=21))
+        windows = [
+            (start1, end1, "early morning (heuristic)"),
+            (start2, end2, "evening (heuristic)"),
+        ]
     return windows
+
 
 def format_window_str(windows):
     parts = []
-    for (s,e,why) in windows[:3]:  # show up to 3
-        parts.append(f"{s.strftime('%-I:%M %p')}–{e.strftime('%-I:%M %p')} ({why})")
+    for (s, e, why) in windows[:3]:  # show up to 3
+        parts.append(f"{pretty_time(s)}–{pretty_time(e)} ({why})")
     return "; ".join(parts)
 
-# ----------- UI
 
-st.set_page_config(page_title="Activity Finder — Health‑Sensitive", page_icon="🧭", layout="wide")
+# -----------------------------
+# UI
+# -----------------------------
 
 st.title("🧭 Activity Finder — Health‑Sensitive & Low/No‑Cost")
-st.caption("Find nearby activity options (parks, tracks, beaches, community centers, etc.) that respect sun/UV and pollen sensitivities, with a list and map.")
+st.caption(
+    "Find nearby activity options (parks, tracks, beaches, community centers, etc.) that respect sun/UV and pollen sensitivities, with a list and map."
+)
 
 with st.sidebar:
     st.header("Your area & preferences")
-    address = st.text_input("City / address / ZIP", value="", placeholder="e.g., 02139 or 'Portland, ME'")
+    address = st.text_input(
+        "City / address / ZIP", value="Portland, ME", placeholder="e.g., 02139 or 'Portland, ME'"
+    )
     radius_km = st.slider("Search radius (km)", 2, 30, 10, 1)
+
     st.divider()
     st.subheader("Health sensitivities")
-    skin_sensitive = st.checkbox("Skin cancer / UV sensitive (avoid strong sun)", value=True)
-    lung_sensitive = st.checkbox("Lung cancer / pollen sensitive (avoid polleny areas)", value=True)
+    skin_sensitive = st.checkbox(
+        "Skin cancer / UV sensitive (avoid strong sun)", value=True
+    )
+    lung_sensitive = st.checkbox(
+        "Lung cancer / pollen sensitive (avoid polleny areas)", value=True
+    )
+
     st.divider()
-    st.subheader("Optional API keys (set in `.streamlit/secrets.toml`)")
-    st.write("• OpenWeatherMap → `OWM_API_KEY` (for UV + hourly precip)")
-    st.write("• Tomorrow.io → `TOMORROW_API_KEY` (pollen; not required)")
-    st.write("• Ambee → `AMBEE_API_KEY` (pollen; not required)")
+    st.subheader("Filters")
+    kind_filters = st.multiselect(
+        "Show only these kinds (optional)",
+        [
+            "Park",
+            "Community center",
+            "Swimming (pool)",
+            "Playground / fitness area",
+            "Outdoor fitness station",
+            "Running track",
+            "Boardwalk / beach / pier",
+            "Open sports field",
+            "Recreation ground",
+            "Ice rink",
+            "Sports centre",
+            "Cycleway / greenway",
+        ],
+    )
+
+    st.divider()
+    with st.expander("Optional API keys (set in `.streamlit/secrets.toml`)"):
+        st.write("• OpenWeatherMap → `OWM_API_KEY` (for UV + hourly precip)")
+        st.write("• Tomorrow.io → `TOMORROW_API_KEY` (pollen; not required)")
+        st.write("• Ambee → `AMBEE_API_KEY` (pollen; not required)")
 
     run = st.button("Find activities", type="primary")
 
@@ -414,10 +556,12 @@ if not loc:
     st.stop()
 
 lat, lon = loc["lat"], loc["lon"]
+
+# Location/Time/Weather context
 tzname = guess_timezone(lat, lon)
 keys = load_optional_keys()
 
-colA, colB = st.columns([2,3])
+colA, colB = st.columns([2, 3])
 with colA:
     st.subheader("Location")
     st.write(loc["display_name"])
@@ -425,7 +569,11 @@ with colA:
     st.write(f"Timezone: {tzname}")
 
     weather_ctx = fetch_weather_context(lat, lon, tzname, keys)
-    windows = build_time_windows(weather_ctx, {"skin_sensitive": skin_sensitive, "lung_sensitive": lung_sensitive})
+    windows = build_time_windows(
+        weather_ctx,
+        {"skin_sensitive": skin_sensitive, "lung_sensitive": lung_sensitive},
+    )
+
     st.markdown("**Suggested times today** (local):")
     st.write(format_window_str(windows))
     if weather_ctx.get("notes"):
@@ -451,29 +599,66 @@ with colB:
         feats.append({**row.to_dict(), **cls, "score": score})
     features = pd.DataFrame(feats)
 
-    # Build note/badges & recommended time windows (same for all — we present overall suggestion string)
-    features["badges"] = features.apply(lambda r: ", ".join(
-        [b for b in [
-            "indoor" if r["indoor"] else None,
-            "shaded" if r["shaded_possible"] else None,
-            "waterfront" if r["waterfront"] else None,
-            "low‑pollen" if r["pollen_risk"] == "low" else ("higher‑pollen" if r["pollen_risk"] == "higher" else None)
-        ] if b]), axis=1)
+    # Optional filter by kind
+    if kind_filters:
+        features = features[features["kind"].isin(kind_filters)].reset_index(drop=True)
+        if features.empty:
+            st.warning("No places match those filters. Clear filters to see all.")
+            st.stop()
 
-    # Rank
+    # Build badges & rank
+    features["badges"] = features.apply(
+        lambda r: ", ".join(
+            [
+                b
+                for b in [
+                    "indoor" if r["indoor"] else None,
+                    "shaded" if r["shaded_possible"] else None,
+                    "waterfront" if r["waterfront"] else None,
+                    "low‑pollen"
+                    if r["pollen_risk"] == "low"
+                    else ("higher‑pollen" if r["pollen_risk"] == "higher" else None),
+                ]
+                if b
+            ]
+        ),
+        axis=1,
+    )
+
     features = features.sort_values(["score", "distance_km"], ascending=[False, True]).reset_index(drop=True)
 
     st.caption("Ranked by proximity and suitability for your sensitivities.")
+
     # Show table
     show_cols = ["name", "kind", "distance_km", "badges", "score"]
     tbl = features[show_cols].copy()
-    tbl["distance_km"] = (tbl["distance_km"]).map(lambda x: f"{x:.2f} km")
+    tbl["distance_km"] = tbl["distance_km"].map(lambda x: f"{x:.2f} km")
     st.dataframe(tbl, hide_index=True, use_container_width=True)
 
+    # Export
+    csv = features.drop(columns=["tags"]).to_csv(index=False)
+    st.download_button(
+        "Download results (CSV)",
+        csv,
+        file_name="activities.csv",
+        mime="text/csv",
+    )
+
+# -----------------------------
+# Map
+# -----------------------------
+
 st.subheader("Map")
-# Build map data
 map_df = features.copy()
-map_df["tooltip"] = map_df.apply(lambda r: f"{r['name']} — {r['kind']}\n{r['badges'] or 'public'}\n{r['distance_km']:.2f} km away\nScore: {r['score']}", axis=1)
+map_df["tooltip"] = map_df.apply(
+    lambda r: (
+        f"{r['name']} — {r['kind']}\n"
+        f"Attributes: {(r['badges'] or 'public')}\n"
+        f"{r['distance_km']:.2f} km away\n"
+        f"Score: {r['score']}"
+    ),
+    axis=1,
+)
 
 initial_view = pdk.ViewState(latitude=lat, longitude=lon, zoom=12, pitch=0)
 layer_points = pdk.Layer(
@@ -492,7 +677,7 @@ layer_text = pdk.Layer(
     get_position='[lon, lat]',
     get_text="name",
     get_size=12,
-    get_alignment_baseline="'bottom'",
+    get_alignment_baseline='"bottom"',  # Correct literal
 )
 
 # A faint ring to visualize the search radius
@@ -513,13 +698,17 @@ r = pdk.Deck(
     map_style=None,
     initial_view_state=initial_view,
     layers=[layer_center, layer_points, layer_text],
-    tooltip={"text": "{tooltip}"}
+    tooltip={"text": "{tooltip}"},
 )
 st.pydeck_chart(r)
 
-st.caption("Tips: Prefer **indoor** or **waterfront** options if pollen triggers symptoms. For UV sensitivity, favor the **suggested times** above and consider shade/indoor options.")
-
+st.caption(
+    "Tips: Prefer **indoor** or **waterfront** options if pollen triggers symptoms. For UV sensitivity, favor the **suggested times** above and consider shade/indoor options."
+)
 
 # Footer
 st.markdown("---")
-st.write("Data © OpenStreetMap contributors. Weather via OpenWeatherMap (if key provided). This tool provides general guidance — always follow your clinician’s advice.")
+st.write(
+    "Data © OpenStreetMap contributors. Weather via OpenWeatherMap (if key provided). This tool provides general guidance — always follow your clinician’s advice."
+)
+
