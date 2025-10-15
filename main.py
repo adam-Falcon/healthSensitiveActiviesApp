@@ -1,7 +1,5 @@
 # app.py
 # Health Path — Sensitivity-aware Activity Finder + Community
-# Explore nearby public places (OSM), weather windows (optional OWM),
-# and a community layer (accounts, profiles, groups, outings, posts).
 # Streamlit 1.50+
 
 import os
@@ -27,14 +25,8 @@ from PIL import Image
 # App constants & branding
 # =========================
 APP_NAME = "Health Path"
+LOGO_PATH = os.getenv("APP_LOGO_PATH", "/mnt/data/0c2e0253-4ec4-4056-b34c-10ea6815d70c.png")
 
-# Use the logo path you provided; allow override via env
-LOGO_PATH = os.getenv(
-    "APP_LOGO_PATH",
-    "/mnt/data/0c2e0253-4ec4-4056-b34c-10ea6815d70c.png"
-)
-
-# Load logo
 _page_icon = None
 try:
     if os.path.exists(LOGO_PATH):
@@ -49,76 +41,117 @@ st.set_page_config(
 )
 
 # =========================
-# Theming / CSS
+# THEME / CSS (safe injector)
 # =========================
-st.markdown("""
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Nunito:wght@800&display=swap" rel="stylesheet">
-<style>
-:root{
-  --hp-primary:#1273EA;
-  --hp-primary-600:#0F5DC0;
-  --hp-primary-700:#0C4D9E;
-  --hp-teal:#21C2A6;
-  --hp-bg:#F7FBFF;
-  --hp-card:#ffffff;
-  --hp-muted:#6b7280;
-  --hp-ring:#dbeafe;
-}
-html, body, [data-testid="stAppViewContainer"] {
-  font-family: "Inter", system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial;
-  background: var(--hp-bg);
-}
-.smallcaps{font-variant:all-small-caps;color:var(--hp-muted);}
-.muted{color:var(--hp-muted);}
-.hp-chip{display:inline-block;background:#EEF6FF;color:#11407F;border:1px solid #DCEBFF;
-  padding:.15rem .5rem;border-radius:999px;font-size:.8rem;margin-right:.25rem;margin-bottom:.25rem;}
-.hp-badge{display:inline-block;background:#F1F5F9;color:#0f172a;border:1px solid #E2E8F0;
-  padding:.15rem .45rem;border-radius:8px;font-size:.8rem;margin-right:.25rem;margin-bottom:.25rem;}
-.hp-card{
-  background:var(--hp-card);
-  border:1px solid #e5e7eb;
-  border-radius:14px;
-  padding:14px 14px 12px 14px;
-  box-shadow:0 8px 24px rgba(2,8,23,.06);
-  margin-bottom:12px;
-}
-.hp-card h4{margin:.1rem 0 .25rem 0;}
-.hp-hr{height:1px;background:#e5e7eb;margin:8px 0 12px 0;border:0;}
+def inject_theme():
+    st.html("""
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Nunito:wght@800&display=swap" rel="stylesheet">
+    <style>
+      :root{
+        --hp-primary:#1273EA;
+        --hp-primary-600:#0F5DC0;
+        --hp-teal:#21C2A6;
+        --hp-bg:#F7FBFF;
+        --hp-card:#ffffff;
+        --hp-muted:#6b7280;
+      }
+      html, body, [data-testid="stAppViewContainer"]{
+        font-family:"Inter",system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial;
+        background:var(--hp-bg);
+      }
 
-div[data-testid="stForm"] {background:var(--hp-card); border:1px solid #e5e7eb; border-radius:14px; padding:14px; box-shadow:0 8px 24px rgba(2,8,23,.05);}
+      /* Header bar */
+      .hp-header{
+        position:sticky; top:0; z-index:999;
+        margin:-1.2rem -1rem 1rem -1rem;
+        padding:.6rem 1rem;
+        background:linear-gradient(90deg,var(--hp-teal) 0%, var(--hp-primary) 100%);
+        box-shadow:0 3px 18px rgba(0,0,0,.12);
+      }
+      .hp-row{display:flex;align-items:center;gap:14px;flex-wrap:wrap;}
+      .hp-brand{display:flex;align-items:center;gap:12px;}
+      .hp-title{display:flex;flex-direction:column;}
+      .hp-title h1{font-family:"Nunito",Inter,sans-serif;font-weight:800;font-size:22px;line-height:1.1;color:#fff;margin:0;}
+      .hp-title small{color:#ECFEFF;opacity:.92;font-weight:500;}
 
-/* top spacing fixes */
-div[data-testid="column"] > div:has(input),
-div[data-testid="column"] > div:has(button),
-div[data-testid="column"] > div:has(div[role="slider"]) { margin-top: 0 !important; }
+      /* Card + minor tweaks */
+      .hp-card{background:var(--hp-card);border:1px solid #e5e7eb;border-radius:14px;padding:14px 14px 12px;box-shadow:0 8px 24px rgba(2,8,23,.06);margin-bottom:12px;}
+      .hp-chip{display:inline-block;background:#EEF6FF;color:#11407F;border:1px solid #DCEBFF;padding:.15rem .5rem;border-radius:999px;font-size:.8rem;margin-right:.25rem;margin-bottom:.25rem;}
 
-/* Sticky brand header */
-.hp-header{position:sticky;top:0;z-index:999;margin:-1.2rem -1rem 1rem -1rem;padding:.55rem 1rem .55rem 1rem;
-  background:linear-gradient(90deg,var(--hp-teal) 0%, var(--hp-primary) 100%);box-shadow:0 3px 18px rgba(0,0,0,.12);}
-.hp-header-row{display:flex;align-items:center;gap:14px;flex-wrap:wrap;}
-.hp-brand{display:flex;align-items:center;gap:12px;}
-.hp-title{display:flex;flex-direction:column;}
-.hp-title h1{font-family:"Nunito",Inter,sans-serif;font-weight:800;font-size:24px;line-height:1.1;color:#fff;margin:0;}
-.hp-title small{color:#ECFEFF;opacity:.92;font-weight:500;}
-.hp-nav{margin-left:auto;display:flex;gap:8px;flex-wrap:wrap;}
-.hp-btn{border:0;background:rgba(255,255,255,.16);color:#fff;padding:.45rem .9rem;border-radius:10px;font-weight:600;cursor:pointer;}
-.hp-btn:hover{background:rgba(255,255,255,.28);}
-.hp-btn.active{background:#fff;color:var(--hp-primary);}
+      /* Buttons */
+      .stButton > button[kind="primary"]{
+        background:var(--hp-primary); border:1px solid var(--hp-primary-600);
+        color:#fff; font-weight:600; border-radius:10px; padding:.5rem .9rem;
+      }
+      .stButton > button[kind="primary"]:hover{background:#0F5DC0;}
 
-/* Streamlit primary button */
-.stButton > button[kind="primary"]{
-  background:var(--hp-primary);
-  border:1px solid var(--hp-primary-700);
-  color:#fff;font-weight:600;border-radius:10px;padding:.5rem .9rem;
-}
-.stButton > button[kind="primary"]:hover{background:var(--hp-primary-600);}
+      /* DataFrame polish */
+      [data-testid="stDataFrame"]{border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;}
+      [data-testid="stDataFrame"] .row_heading,[data-testid="stDataFrame"] .blank{display:none;}
 
-/* dataframe polish */
-[data-testid="stDataFrame"]{border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;background:#fff;}
-[data-testid="stDataFrame"] .row_heading,[data-testid="stDataFrame"] .blank{display:none;}
-</style>
-""", unsafe_allow_html=True)
+      /* Compact controls */
+      div[data-testid="column"] > div:has(input),
+      div[data-testid="column"] > div:has(button),
+      div[data-testid="column"] > div:has(div[role="slider"]) { margin-top: 0 !important; }
+    </style>
+    """)
+
+def render_brand_header(active_route: str):
+    # Logo block
+    try:
+        if os.path.exists(LOGO_PATH):
+            logo_html = f'<img src="file://{LOGO_PATH}" alt="{APP_NAME}" style="width:44px;height:auto;display:block;border-radius:8px;" />'
+        else:
+            logo_html = '<div style="font-size:28px;line-height:1;">🩺</div>'
+    except Exception:
+        logo_html = '<div style="font-size:28px;line-height:1;">🩺</div>'
+
+    # Top gradient brand bar
+    st.html(f"""
+      <div class="hp-header">
+        <div class="hp-row">
+          <div class="hp-brand">{logo_html}</div>
+          <div class="hp-title">
+            <h1>{APP_NAME}</h1>
+            <small>Find safer, low-/no-cost activities and meet people to do them with.</small>
+          </div>
+        </div>
+      </div>
+    """)
+
+    # Nav row (Streamlit buttons so clicks change state)
+    left, ex_col, cm_col, prof_col = st.columns([0.64, 0.12, 0.12, 0.12])
+    with ex_col:
+        if st.button("Explore", key="nav_explore"):
+            st.session_state["route"] = "explore"
+            st.session_state.pop("view_group_id", None)
+            st.rerun()
+    with cm_col:
+        if st.button("Community", key="nav_community"):
+            st.session_state["route"] = "community"
+            st.rerun()
+    with prof_col:
+        if st.button("My Profile", key="nav_profile"):
+            st.session_state["route"] = "profile"
+            st.rerun()
+
+    # Highlight the active one
+    active_map = {"explore":"nav_explore","community":"nav_community","profile":"nav_profile"}
+    active_key = active_map.get(active_route, "nav_explore")
+    st.html(f"""
+      <style>
+        button[data-testid="baseButton-secondary"][id*="{active_key}"] {{
+            background:#fff !important; color:#0f4da2 !important; border:0 !important;
+        }}
+      </style>
+    """)
+
+# Inject theme & header (order matters)
+inject_theme()
+if "route" not in st.session_state:
+    st.session_state["route"] = "explore"
+render_brand_header(st.session_state.get("route","explore"))
 
 # =========================
 # HTTP session (polite)
@@ -789,9 +822,6 @@ except Exception as e:
     st.error(f"Database init failed: {e}")
     st.stop()
 
-if "route" not in st.session_state:
-    st.session_state["route"] = "explore"
-
 if "user_id" not in st.session_state:
     st.session_state["user_id"] = None
 
@@ -800,67 +830,9 @@ def set_route(r):
     safe_rerun()
 
 # =========================
-# Header renderer
-# =========================
-def render_app_header(active_route: str):
-    st.markdown('<div class="hp-header">', unsafe_allow_html=True)
-    col_logo, col_title, col_nav = st.columns([0.12, 0.74, 0.14])
-    with col_logo:
-        if os.path.exists(LOGO_PATH):
-            st.image(LOGO_PATH, use_container_width=False, width=48)
-        else:
-            st.markdown("### 🩺")
-    with col_title:
-        st.markdown(
-            """
-            <div class="hp-title">
-              <h1>Health Path</h1>
-              <small>Find safer, low-/no-cost activities and meet people to do them with.</small>
-            </div>
-            """, unsafe_allow_html=True
-        )
-    with col_nav:
-        # custom buttons to ensure active state without fragile JS dependencies
-        a_ex = st.session_state.get("route") == "explore"
-        a_co = st.session_state.get("route") == "community"
-        a_pr = st.session_state.get("route") == "profile"
-
-        b1, b2, b3 = st.columns(3)
-        with b1:
-            clicked = st.button("Explore", key="nav_explore", use_container_width=True)
-            if clicked: set_route("explore")
-            st.markdown('<div class="hp-nav"></div>', unsafe_allow_html=True)
-        with b2:
-            clicked = st.button("Community", key="nav_comm", use_container_width=True)
-            if clicked: set_route("community")
-        with b3:
-            clicked = st.button("My Profile", key="nav_prof", use_container_width=True)
-            if clicked: set_route("profile")
-
-        # apply active styles by injecting a small script that toggles class on the three nav buttons
-        active_idx = {"explore":1,"community":2,"profile":3}.get(active_route, 1)
-        st.markdown(
-            """
-            <script>
-              const idx = %d;
-              const sroot = window.parent.document;
-              const btns = Array.from(sroot.querySelectorAll('button[kind="secondary"], button[class*="st-emotion-cache"]')).filter(b => /Explore|Community|My Profile/.test(b.innerText));
-              btns.forEach((b,i)=>{ b.classList.remove('hp-btn','active'); b.classList.add('hp-btn'); if(i===idx-1){ b.classList.add('active'); }});
-            </script>
-            """ % active_idx,
-            unsafe_allow_html=True
-        )
-
-    st.markdown('</div>', unsafe_allow_html=True)
-
-# Render header
-render_app_header(st.session_state.get("route","explore"))
-
-# =========================
 # Auth widgets
 # =========================
 def render_auth_gate():
-    """Return True if logged in, else render login/signup and return False."""
     if st.session_state.user_id is not None:
         return True
     st.markdown("#### Welcome to Health Path")
@@ -914,7 +886,6 @@ def render_auth_gate():
 def page_explore():
     st.markdown("### 🔍 Explore activities near you")
 
-    # Defaults from profile
     default_sens = []
     default_inc = set()
     if st.session_state.user_id:
@@ -924,22 +895,20 @@ def page_explore():
         try: default_inc = set(json.loads(me.get("activities") or "[]"))
         except Exception: default_inc = set()
 
-    # Search Row
     col1, col2, col3 = st.columns([3, 1.4, 2.8])
-    with st.container():
-        with col1:
-            address = st.text_input("City / address / ZIP", value="Portland, ME",
-                                    label_visibility="collapsed",
-                                    placeholder="e.g., 02139 or 'Portland, ME'")
-        with col2:
-            radius_km = st.slider("Radius (km)", 2, 30, 10, 1, label_visibility="collapsed")
-        with col3:
-            sensitivities = st.multiselect(
-                "Sensitivities (choose any)",
-                ["UV sensitivity","Pollen sensitivity","Breathing sensitivity","Smog sensitivity",
-                 "Low impact","Noise sensitivity","Privacy","Accessibility"],
-                default=default_sens or ["UV sensitivity","Pollen sensitivity"]
-            )
+    with col1:
+        address = st.text_input("City / address / ZIP", value="Portland, ME",
+                                label_visibility="collapsed",
+                                placeholder="e.g., 02139 or 'Portland, ME'")
+    with col2:
+        radius_km = st.slider("Radius (km)", 2, 30, 10, 1, label_visibility="collapsed")
+    with col3:
+        sensitivities = st.multiselect(
+            "Sensitivities (choose any)",
+            ["UV sensitivity","Pollen sensitivity","Breathing sensitivity","Smog sensitivity",
+             "Low impact","Noise sensitivity","Privacy","Accessibility"],
+            default=default_sens or ["UV sensitivity","Pollen sensitivity"]
+        )
 
     ALL_ACTIVITIES = [
         "Walking","Hiking","Running","Cycling","Swimming","Museums",
@@ -949,7 +918,7 @@ def page_explore():
     ]
 
     with st.expander("Include / Exclude activities by type", expanded=False):
-        st.caption("Select activities to include and/or exclude. If both selected for the same item, exclusion wins.")
+        st.caption("Select activities to include and/or exclude. If both are selected for the same item, exclusion wins.")
         cols_inc = st.columns(3); cols_exc = st.columns(3)
         include_flags, exclude_flags = {}, {}
         for i, act in enumerate(ALL_ACTIVITIES):
@@ -990,7 +959,6 @@ def page_explore():
         st.markdown("**Suggested times today** (local):")
         st.write(format_window_str(windows))
         if weather_ctx.get("notes"):
-            st.markdown('<div class="hp-hr"></div>', unsafe_allow_html=True)
             with st.expander("Weather notes"):
                 for n in weather_ctx["notes"]:
                     st.write("• " + n)
@@ -1051,7 +1019,6 @@ def page_explore():
                 elif r["road_distance_m"] < 120: chips.append('<span class="hp-chip">near traffic</span>')
             return " ".join(chips)
 
-        # Table summary
         features = features.sort_values(["score","distance_km"], ascending=[False, True]).reset_index(drop=True)
         features["activities_list"] = features["activities"].apply(lambda s: ", ".join(sorted(s)) if s else "—")
 
@@ -1061,14 +1028,12 @@ def page_explore():
         st.dataframe(tbl, hide_index=True, use_container_width=True)
 
         st.markdown('<div class="hp-hr"></div>', unsafe_allow_html=True)
-        with st.container():
-            for _, r in features.head(12).iterrows():
-                with st.container():
-                    st.markdown('<div class="hp-card">', unsafe_allow_html=True)
-                    st.markdown(f"**{r['name']}** &nbsp;·&nbsp; _{r['kind']}_")
-                    st.caption(f"{r['distance_km']:.2f} km away  •  Score: {r['score']:.0f}")
-                    st.markdown(make_badges(r), unsafe_allow_html=True)
-                    st.markdown('</div>', unsafe_allow_html=True)
+        for _, r in features.head(12).iterrows():
+            st.markdown('<div class="hp-card">', unsafe_allow_html=True)
+            st.markdown(f"**{r['name']}** &nbsp;·&nbsp; _{r['kind']}_")
+            st.caption(f"{r['distance_km']:.2f} km away  •  Score: {r['score']:.0f}")
+            st.markdown(make_badges(r), unsafe_allow_html=True)
+            st.markdown('</div>', unsafe_allow_html=True)
 
         csv = features.drop(columns=["tags"]).to_csv(index=False)
         st.download_button("Download results (CSV)", csv, "activities.csv", "text/csv")
@@ -1118,56 +1083,53 @@ def page_community():
     other_cards = [g for g in all_groups if g["id"] not in memberships]
 
     def render_group_card(gdict):
-        with st.container():
-            st.markdown('<div class="hp-card">', unsafe_allow_html=True)
-            gid = gdict["id"]
-            tags = ", ".join(json.loads(gdict.get("tags") or "[]")) or "—"
-            nxt = next_outing(gid)
-            if nxt:
-                try:
-                    loc = nxt.get("location_name") or "TBD"
-                    dt = datetime.fromisoformat(nxt["time_utc"]).astimezone(pytz.timezone("UTC"))
-                    nxt_txt = f"Next outing: {dt.strftime('%b %d %Y %H:%M UTC')} @ {loc}"
-                except Exception:
-                    nxt_txt = "Next outing: —"
-            else:
+        st.markdown('<div class="hp-card">', unsafe_allow_html=True)
+        gid = gdict["id"]
+        tags = ", ".join(json.loads(gdict.get("tags") or "[]")) or "—"
+        nxt = next_outing(gid)
+        if nxt:
+            try:
+                loc = nxt.get("location_name") or "TBD"
+                dt = datetime.fromisoformat(nxt["time_utc"]).astimezone(pytz.timezone("UTC"))
+                nxt_txt = f"Next outing: {dt.strftime('%b %d %Y %H:%M UTC')} @ {loc}"
+            except Exception:
                 nxt_txt = "Next outing: —"
+        else:
+            nxt_txt = "Next outing: —"
 
-            st.markdown(f"### {gdict['name']}")
-            st.caption(f"City: {gdict.get('city') or '—'} • Owner: {gdict['owner_name']} • Tags: {tags}")
-            st.caption(nxt_txt)
-            c1, c2, c3, c4 = st.columns(4)
-            with c1:
-                if st.button("Open", key=f"view_g_{gid}"):
+        st.markdown(f"### {gdict['name']}")
+        st.caption(f"City: {gdict.get('city') or '—'} • Owner: {gdict['owner_name']} • Tags: {tags}")
+        st.caption(nxt_txt)
+        c1, c2, c3, _ = st.columns(4)
+        with c1:
+            if st.button("Open", key=f"view_g_{gid}"):
+                st.session_state["view_group_id"] = gid
+                safe_rerun()
+        with c2:
+            if not is_member(gid, me["id"]):
+                if st.button("Join", key=f"join_g_{gid}"):
+                    join_group(gid, me["id"])
+                    st.toast("Joined group", icon="✅")
                     st.session_state["view_group_id"] = gid
                     safe_rerun()
-            with c2:
-                if not is_member(gid, me["id"]):
-                    if st.button("Join", key=f"join_g_{gid}"):
-                        join_group(gid, me["id"])
-                        st.toast("Joined group", icon="✅")
-                        st.session_state["view_group_id"] = gid
-                        safe_rerun()
-                else:
-                    if st.button("Leave", key=f"leave_g_{gid}"):
-                        leave_group(gid, me["id"])
-                        st.toast("Left group", icon="⚠️")
+            else:
+                if st.button("Leave", key=f"leave_g_{gid}"):
+                    leave_group(gid, me["id"])
+                    st.toast("Left group", icon="⚠️")
+                    if st.session_state.get("view_group_id") == gid:
+                        st.session_state["view_group_id"] = None
+                    safe_rerun()
+        with c3:
+            if gdict["owner_id"] == me["id"]:
+                if st.button("Delete", key=f"del_g_{gid}"):
+                    if delete_group(gid, me["id"]):
+                        st.toast("Group deleted", icon="🗑️")
                         if st.session_state.get("view_group_id") == gid:
                             st.session_state["view_group_id"] = None
                         safe_rerun()
-            with c3:
-                if gdict["owner_id"] == me["id"]:
-                    if st.button("Delete", key=f"del_g_{gid}"):
-                        if delete_group(gid, me["id"]):
-                            st.toast("Group deleted", icon="🗑️")
-                            if st.session_state.get("view_group_id") == gid:
-                                st.session_state["view_group_id"] = None
-                            safe_rerun()
-                        else:
-                            st.error("Only the owner can delete this group.")
-            with c4:
-                pass
-            st.markdown('</div>', unsafe_allow_html=True)
+                    else:
+                        st.error("Only the owner can delete this group.")
+        st.markdown('</div>', unsafe_allow_html=True)
 
     st.markdown("#### Your groups")
     if not my_cards:
@@ -1205,7 +1167,7 @@ def page_community():
             st.session_state["view_group_id"] = gid
             safe_rerun()
 
-    # ---- Group detail page ----
+    # Group detail page
     gid_view = st.session_state.get("view_group_id")
     if not gid_view:
         return
@@ -1273,7 +1235,6 @@ def page_community():
                 if not t_title.strip():
                     st.error("Title required.")
                 else:
-                    # Geocode best-effort
                     lat_o = lon_o = None
                     loc_o = t_place.strip()
                     if loc_o:
@@ -1310,7 +1271,6 @@ def page_community():
                 st.markdown('<div class="hp-card">', unsafe_allow_html=True)
                 st.markdown(f"**{p['username']}** — _{p['created_at']}_")
                 st.write(p["body"])
-                # comments
                 cmts = list_comments(p["id"])
                 if cmts:
                     for c in cmts:
