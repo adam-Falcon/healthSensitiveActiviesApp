@@ -1,10 +1,12 @@
 # app.py
 # Activity Finder — Sensitivity-aware + Community (Profiles, Groups, Outings)
+# Public places from OpenStreetMap; optional weather from OWM.
+# Adds accounts, profiles, groups, and outings using a local SQLite DB.
 
-import math
-import time
 import os
 import json
+import time
+import math
 import sqlite3
 import hashlib
 import secrets
@@ -21,7 +23,7 @@ from timezonefinder import TimezoneFinder
 # -----------------------------
 # Config
 # -----------------------------
-APP_USER_AGENT = "HealthSensitiveActivityFinder/3.0 (contact: contact@example.com)"
+APP_USER_AGENT = "HealthSensitiveActivityFinder/3.1 (contact: contact@example.com)"
 OSM_HEADERS = {"User-Agent": APP_USER_AGENT, "Accept-Language": "en"}
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
@@ -30,7 +32,14 @@ OWM_ONECALL_URL = "https://api.openweathermap.org/data/3.0/onecall"
 DB_PATH = os.getenv("APP_DB_PATH", "data.db")
 os.makedirs(os.path.dirname(DB_PATH) or ".", exist_ok=True)
 
-st.set_page_config(page_title="Activity Finder — Sensitivity-aware + Community", page_icon="🧭", layout="wide")
+st.set_page_config(
+    page_title="Activity Finder — Sensitivity-aware + Community",
+    page_icon="🧭",
+    layout="wide",
+)
+
+# Show detailed errors instead of going blank
+st.set_option("client.showErrorDetails", True)
 
 # compact top row spacing
 st.markdown(
@@ -435,7 +444,9 @@ def fetch_roads(lat, lon, radius_km):
     return pd.DataFrame(rows)
 
 def guess_timezone(lat, lon):
-    tzname = TimezoneFinder().timezone_at(lat=lat, lng=lon)
+    if lat is None or lon is None:
+        return "America/New_York"
+    tzname = TimezoneFinder().timezone_at(lat=float(lat), lng=float(lon))
     return tzname or "America/New_York"
 
 def load_optional_keys():
@@ -481,6 +492,19 @@ def contiguous_windows(times, good_mask):
 def pretty_time(dt):
     try: return dt.strftime("%-I:%M %p")
     except ValueError: return dt.strftime("%I:%M %p").lstrip("0")
+
+def local_time_str(iso_utc: str, lat=None, lon=None, fallback_tz="America/New_York"):
+    """Safely convert an ISO UTC string to readable local time (always returns string)."""
+    try:
+        if not iso_utc:
+            return "TBD"
+        dt = datetime.fromisoformat(iso_utc)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=pytz.utc)
+        tz = pytz.timezone(guess_timezone(lat, lon) or fallback_tz)
+        return dt.astimezone(tz).strftime("%b %d, %Y %I:%M %p %Z")
+    except Exception:
+        return str(iso_utc)
 
 # -----------------------------
 # Classification & scoring
@@ -771,6 +795,7 @@ with tab_explore:
             feats.append({**row.to_dict(), **cls, "score": score})
         features = pd.DataFrame(feats)
 
+        # Activity include/exclude filters
         def matches_includes(activity_set):
             if not include_set:
                 return True
@@ -823,7 +848,7 @@ with tab_explore:
     def _fmt_tooltip(r):
         rd = "—" if (r.get("road_distance_m") is None) else f"{int(r['road_distance_m'])} m"
         return f"{r['name']} — score {r['score']:.0f}\nActivities: {r['activities_list']}\nAttributes: {r['badges']}\n{r['distance_km']:.2f} km away | Road: {rd}"
-    map_df["tooltip"] = map_df.apply(_fmt_tooltip, axis=1)
+    map_df["tooltip"] = map_df.apply(_fmt_tooltip, axis=1).astype(str)
 
     initial_view = pdk.ViewState(latitude=float(lat), longitude=float(lon), zoom=12, pitch=0)
     layer_points = pdk.Layer("ScatterplotLayer", data=map_df, get_position='[lon, lat]', get_radius=100, pickable=True, radius_min_pixels=6, radius_max_pixels=40)
@@ -993,9 +1018,8 @@ with tab_community:
                 else:
                     for o in outings:
                         with st.container(border=True):
-                            local_tz = pytz.timezone(guess_timezone(o["lat"], o["lon"])) if (o["lat"] and o["lon"]) else pytz.timezone("America/New_York")
-                            dt = datetime.fromisoformat(o["time_utc"]).astimezone(local_tz)
-                            st.markdown(f"**{o['title']}** — {dt.strftime('%b %d, %Y %I:%M %p %Z')}")
+                            when_local = local_time_str(o.get("time_utc"), o.get("lat"), o.get("lon"))
+                            st.markdown(f"**{o['title']}** — {when_local}")
                             st.caption(f"Where: {o.get('location_name') or 'TBD'} • Host: {o['creator']} • Max: {o.get('max_people') or '—'}")
                             if o.get("notes"):
                                 st.write(o["notes"])
@@ -1034,40 +1058,52 @@ with tab_community:
                         else:
                             # Geocode (best effort)
                             lat_o = lon_o = None
-                            loc_o = t_place.strip()
+                            loc_o = (t_place or "").strip()
                             if loc_o:
                                 geo = geocode_address(loc_o)
                                 if geo:
                                     lat_o, lon_o = geo["lat"], geo["lon"]
                                     loc_o = geo["display_name"]
-                            tzname_g = guess_timezone(lat_o, lon_o) if (lat_o and lon_o) else "UTC"
+                            tzname_g = guess_timezone(lat_o, lon_o) if (lat_o is not None and lon_o is not None) else "UTC"
                             tz = pytz.timezone(tzname_g)
                             dt_local = datetime.combine(t_date, t_time)
                             dt_local = tz.localize(dt_local)
                             time_utc = dt_local.astimezone(pytz.utc).isoformat()
-                            _ = create_outing(g["id"], t_title.strip(), time_utc, loc_o, lat_o, lon_o, (int(t_max) or None), t_notes.strip(), me["id"])
+                            _ = create_outing(
+                                g["id"], t_title.strip(), time_utc, loc_o,
+                                lat_o, lon_o, (int(t_max) or None), t_notes.strip(), me["id"]
+                            )
                             st.success("Outing created.")
                             _safe_rerun()
 
             # Map of group outings (if any have coords)
-            coords = [o for o in list_outings(g["id"]) if o.get("lat") and o.get("lon")]
+            coords = [o for o in list_outings(g["id"]) if o.get("lat") is not None and o.get("lon") is not None]
             if coords:
                 st.markdown("#### Outings map")
                 map_df = pd.DataFrame([{
                     "name": o["title"],
                     "lat": float(o["lat"]),
                     "lon": float(o["lon"]),
-                    "when": o["time_utc"],
+                    "when_local": local_time_str(o.get("time_utc"), o.get("lat"), o.get("lon")),
                     "where": o.get("location_name") or "",
                 } for o in coords])
-                map_df["tooltip"] = map_df.apply(lambda r: f"{r['name']}\n{r['where']}\n{r['when']}", axis=1)
-                center_lat = float(sum(map_df["lat"])/len(map_df))
-                center_lon = float(sum(map_df["lon"])/len(map_df))
-                iv = pdk.ViewState(latitude=center_lat, longitude=center_lon, zoom=11, pitch=0)
-                layer_points = pdk.Layer("ScatterplotLayer", data=map_df, get_position='[lon, lat]', get_radius=120, pickable=True, radius_min_pixels=6, radius_max_pixels=40)
-                layer_text = pdk.Layer("TextLayer", data=map_df, get_position='[lon, lat]', get_text="name", get_size=12, get_alignment_baseline='"bottom"')
-                deck = pdk.Deck(map_style=None, initial_view_state=iv, layers=[layer_points, layer_text], tooltip={"text": "{tooltip}"})
-                st.pydeck_chart(deck)
+                # Ensure string-only tooltip; no JS date parsing
+                map_df["tooltip"] = map_df.apply(
+                    lambda r: f"{r['name']}\n{r['where']}\n{r['when_local']}",
+                    axis=1
+                ).astype(str)
+                # Coerce to strict types; drop bad rows
+                map_df["lat"] = map_df["lat"].astype(float)
+                map_df["lon"] = map_df["lon"].astype(float)
+                map_df = map_df.dropna(subset=["lat","lon"])
+                if not map_df.empty:
+                    center_lat = float(map_df["lat"].mean())
+                    center_lon = float(map_df["lon"].mean())
+                    iv = pdk.ViewState(latitude=center_lat, longitude=center_lon, zoom=11, pitch=0)
+                    layer_points = pdk.Layer("ScatterplotLayer", data=map_df, get_position='[lon, lat]', get_radius=120, pickable=True, radius_min_pixels=6, radius_max_pixels=40)
+                    layer_text = pdk.Layer("TextLayer", data=map_df, get_position='[lon, lat]', get_text="name", get_size=12, get_alignment_baseline='"bottom"')
+                    deck = pdk.Deck(map_style=None, initial_view_state=iv, layers=[layer_points, layer_text], tooltip={"text": "{tooltip}"})
+                    st.pydeck_chart(deck)
 
 # -----------------------------
 # Footer
