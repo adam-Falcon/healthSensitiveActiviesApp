@@ -23,7 +23,7 @@ from timezonefinder import TimezoneFinder
 # -----------------------------
 # Config
 # -----------------------------
-APP_USER_AGENT = "HealthSensitiveActivityFinder/4.1 (contact: contact@example.com)"
+APP_USER_AGENT = "HealthSensitiveActivityFinder/4.2 (contact: contact@example.com)"
 OSM_HEADERS = {"User-Agent": APP_USER_AGENT, "Accept-Language": "en"}
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
@@ -64,7 +64,6 @@ _seed_route_from_url()
 
 def set_route(route: str, **params):
     st.session_state["route"] = route
-    # reset group id unless route=group
     if route != "group":
         st.session_state["view_group_id"] = None
         qp.pop("gid", None)
@@ -276,7 +275,6 @@ def list_groups(search_city: str = ""):
     conn = db()
     cur = conn.cursor()
     if search_city.strip():
-        # Search by city ONLY (location-first behavior)
         cur.execute("""
           SELECT g.*, u.username AS owner_name
           FROM groups g JOIN users u ON u.id=g.owner_id
@@ -305,17 +303,27 @@ def get_group(gid):
     conn.close()
     return dict(row) if row else None
 
-def my_groups(uid):
+def my_groups(uid, city_filter: str | None = None):
     conn = db()
     cur = conn.cursor()
-    cur.execute("""
-      SELECT g.*, u.username AS owner_name, m.role
-      FROM group_members m
-      JOIN groups g ON g.id=m.group_id
-      JOIN users u ON u.id=g.owner_id
-      WHERE m.user_id=?
-      ORDER BY g.created_at DESC
-    """, (uid,))
+    if city_filter and city_filter.strip():
+        cur.execute("""
+          SELECT g.*, u.username AS owner_name, m.role
+          FROM group_members m
+          JOIN groups g ON g.id=m.group_id
+          JOIN users u ON u.id=g.owner_id
+          WHERE m.user_id=? AND COALESCE(g.city,'') LIKE ?
+          ORDER BY g.created_at DESC
+        """, (uid, f"%{city_filter}%"))
+    else:
+        cur.execute("""
+          SELECT g.*, u.username AS owner_name, m.role
+          FROM group_members m
+          JOIN groups g ON g.id=m.group_id
+          JOIN users u ON u.id=g.owner_id
+          WHERE m.user_id=?
+          ORDER BY g.created_at DESC
+        """, (uid,))
     rows = [dict(r) for r in cur.fetchall()]
     conn.close()
     return rows
@@ -367,6 +375,20 @@ def list_outings(group_id):
     rows = [dict(r) for r in cur.fetchall()]
     conn.close()
     return rows
+
+def next_outing_for_group(group_id):
+    """Return next upcoming outing (dict) or None."""
+    conn = db()
+    cur = conn.cursor()
+    cur.execute("""
+      SELECT o.*, u.username AS creator
+      FROM outings o JOIN users u ON u.id=o.created_by
+      WHERE o.group_id=? AND o.time_utc >= ?
+      ORDER BY o.time_utc ASC LIMIT 1
+    """, (group_id, now_iso()))
+    row = cur.fetchone()
+    conn.close()
+    return dict(row) if row else None
 
 def rsvp(outing_id, uid, status):
     conn = db()
@@ -530,7 +552,7 @@ def fetch_places(lat, lon, radius_km):
             lat2, lon2 = el["center"]["lat"], el["center"]["lon"]
         else:
             lat2, lon2 = el.get("lat"), el.get("lon")
-        if lat2 is None or lon2 is None: 
+        if lat2 is None or lon2 is None:
             continue
         dist = haversine_km(lat, lon, lat2, lon2)
         name = tags.get("name") or tags.get("leisure") or tags.get("amenity") or tags.get("tourism") or tags.get("man_made") or "Unnamed"
@@ -543,7 +565,7 @@ def fetch_roads(lat, lon, radius_km):
     rows = []
     for el in els:
         cen = el.get("center")
-        if not cen: 
+        if not cen:
             continue
         rows.append({"lat": cen["lat"], "lon": cen["lon"], "tags": el.get("tags", {})})
     return pd.DataFrame(rows)
@@ -580,7 +602,7 @@ def fetch_weather_context(lat, lon, tzname, keys):
                 if dt_local.date()==today and (("rain" in h and h["rain"]) or (h.get("pop",0)>=0.5 and h.get("clouds",0)>=70)):
                     rain_hours.add(dt_local.hour)
             for rec in hourly:
-                if rec["time"].hour in rain_hours: 
+                if rec["time"].hour in rain_hours:
                     rec["rain"]=True
             if w.get("daily"):
                 daily_uvi = w["daily"][0].get("uvi")
@@ -762,7 +784,8 @@ def build_time_windows(weather_ctx, active):
         why=[]
         if "UV sensitivity" in active: why.append("lower UV")
         if "Pollen sensitivity" in active or "Breathing sensitivity" in active:
-            why.append("lower pollen (est.)" + (" after rain" if any(hourly[i].get("rain") for i in range(s,e+1)) else ""))
+            suffix = " after rain" if any(hourly[i].get("rain") for i in range(s, e+1)) else ""
+            why.append(f"lower pollen (est.){suffix}")
         reason = ", ".join([w for w in why if w]) if why else "comfortable"
         windows.append((start,end, reason))
     if not windows:
@@ -781,7 +804,7 @@ def format_window_str(windows):
     return "; ".join(parts)
 
 # -----------------------------
-# UI components
+# UI constants
 # -----------------------------
 ALL_SENS = [
     "UV sensitivity", "Pollen sensitivity", "Breathing sensitivity",
@@ -1026,71 +1049,118 @@ def render_profile(me):
         st.success("Profile updated. Explore defaults will follow your profile.")
         st.rerun()
 
-# ------------ Community (groups list/create) ------------
+    st.divider()
+    st.markdown("#### Your groups")
+    mine = my_groups(me["id"])
+    if not mine:
+        st.caption("You haven't joined any groups yet.")
+    else:
+        for g in mine:
+            city_disp = g.get('city') or '—'
+            st.write(f"• {g['name']} — {city_disp} (role: {g['role']})")
+            if st.button(f"Open {g['name']}", key=f"prof_open_{g['id']}"):
+                goto_group(g["id"])
+
+# ------------ Community ------------
+def _render_group_card(g, me_id):
+    """Reusable group card with next outing snippet + actions."""
+    city_disp = g.get('city') or '—'
+    st.markdown(f"**{city_disp}** — {g['name']}  ")
+    desc = g.get('description') or ''
+    if desc:
+        st.write(desc)
+
+    # tags
+    try:
+        tags_list = json.loads(g['tags'] or '[]')
+    except Exception:
+        tags_list = []
+    st.caption(f"Owner: {g['owner_name']} • Tags: {', '.join(tags_list) or '—'} • Created: {g['created_at'][:10]}")
+
+    # Next outing
+    nxt = next_outing_for_group(g["id"])
+    if nxt:
+        try:
+            if nxt.get("lat") and nxt.get("lon"):
+                tzname = guess_timezone(nxt["lat"], nxt["lon"])
+                tz = pytz.timezone(tzname)
+            else:
+                tz = pytz.timezone("America/New_York")
+            ts = datetime.fromisoformat(nxt["time_utc"]).astimezone(tz).strftime("%b %d, %Y %I:%M %p %Z")
+        except Exception:
+            ts = nxt["time_utc"]
+        st.caption(f"Next outing: {nxt['title']} — {ts} — {nxt.get('location_name') or 'TBD'}")
+    else:
+        st.caption("Next outing: —")
+
+    actions = st.columns(4)
+    with actions[0]:
+        if st.button("View", key=f"view_g_{g['id']}"):
+            goto_group(g["id"])
+    with actions[1]:
+        if not is_member(g["id"], me_id):
+            if st.button("Join", key=f"join_g_{g['id']}"):
+                join_group(g["id"], me_id)
+                st.success("Joined group.")
+                st.rerun()
+        else:
+            st.caption("You are a member")
+    with actions[2]:
+        if is_member(g["id"], me_id) and (g["owner_id"] != me_id):
+            if st.button("Leave", key=f"leave_g_{g['id']}"):
+                leave_group(g["id"], me_id)
+                st.warning("Left group.")
+                st.rerun()
+    with actions[3]:
+        if g["owner_id"] == me_id:
+            if st.button("Open (owner)", key=f"open_owner_g_{g['id']}"):
+                goto_group(g["id"])
+
 def render_community(me):
     st.markdown("### 👥 Community")
-    gL, gR = st.columns([2, 2])
 
-    with gL:
-        city_q = st.text_input("Search groups by city", value="", placeholder="e.g., Portland, ME")
-        rows = list_groups(city_q)
-        st.caption("Results are filtered by group city (location).")
-        for g in rows[:100]:
+    city_q = st.text_input("Search groups by city", value="", placeholder="e.g., Portland, ME")
+    st.caption("Results are filtered by group city (location).")
+
+    # Your groups first (filtered by city if provided)
+    st.subheader("Your groups")
+    mine = my_groups(me["id"], city_filter=city_q)
+    if not mine:
+        st.caption("No memberships match this city." if city_q.strip() else "You haven't joined any groups yet.")
+    else:
+        for g in mine[:100]:
             with st.container(border=True):
-                # Emphasize location first
-                city_disp = g.get('city') or '—'
-                st.markdown(f"**{city_disp}** — {g['name']}  \n{g.get('description') or ''}")
-                try:
-                    tags_list = json.loads(g['tags'] or '[]')
-                except Exception:
-                    tags_list = []
-                st.caption(f"Owner: {g['owner_name']} • Tags: {', '.join(tags_list) or '—'} • Created: {g['created_at'][:10]}")
-                jcols = st.columns(4)
-                with jcols[0]:
-                    if st.button("View", key=f"view_g_{g['id']}"):
-                        goto_group(g["id"])
-                with jcols[1]:
-                    if not is_member(g["id"], me["id"]):
-                        if st.button("Join", key=f"join_g_{g['id']}"):
-                            join_group(g["id"], me["id"])
-                            st.success("Joined group.")
-                            st.rerun()
-                    else:
-                        st.caption("You are a member")
-                with jcols[2]:
-                    if is_member(g["id"], me["id"]) and (g["owner_id"] != me["id"]):
-                        if st.button("Leave", key=f"leave_g_{g['id']}"):
-                            leave_group(g["id"], me["id"])
-                            st.warning("Left group.")
-                            st.rerun()
-                with jcols[3]:
-                    if g["owner_id"] == me["id"]:
-                        if st.button("Open (owner)", key=f"open_owner_g_{g['id']}"):
-                            goto_group(g["id"])
+                _render_group_card(g, me["id"])
 
-    with gR:
-        st.caption("Create a new group")
-        with st.form("new_group"):
-            gn = st.text_input("Group name")
-            gd = st.text_area("Description")
-            gc = st.text_input("City (location)")
-            gt = st.text_input("Tags (comma-separated, e.g. walking, low impact)")
-            make = st.form_submit_button("Create group")
-        if make:
-            if not gn.strip():
-                st.error("Group name required.")
-            else:
-                tags = [t.strip() for t in gt.split(",") if t.strip()] if gt else []
-                gid = create_group(gn.strip(), gd.strip(), gc.strip(), tags, me["id"])
-                join_group(gid, me["id"], role="owner")
-                st.success("Group created.")
-                goto_group(gid)
+    st.subheader("Other groups")
+    # All groups by city, excluding ones already in 'mine'
+    all_by_city = list_groups(city_q)
+    mine_ids = {g["id"] for g in mine}
+    others = [g for g in all_by_city if g["id"] not in mine_ids]
+    if not others:
+        st.caption("No other groups match this city.")
+    else:
+        for g in others[:100]:
+            with st.container(border=True):
+                _render_group_card(g, me["id"])
 
-        st.caption("Your groups")
-        mg = my_groups(me["id"])
-        for g in mg:
-            if st.button(f"Open: {g['name']} ({g.get('city') or '—'})", key=f"my_open_{g['id']}"):
-                goto_group(g["id"])
+    st.divider()
+    st.caption("Create a new group")
+    with st.form("new_group"):
+        gn = st.text_input("Group name")
+        gd = st.text_area("Description")
+        gc = st.text_input("City (location)")
+        gt = st.text_input("Tags (comma-separated, e.g. walking, low impact)")
+        make = st.form_submit_button("Create group")
+    if make:
+        if not gn.strip():
+            st.error("Group name required.")
+        else:
+            tags = [t.strip() for t in gt.split(",") if t.strip()] if gt else []
+            gid = create_group(gn.strip(), gd.strip(), gc.strip(), tags, me["id"])
+            join_group(gid, me["id"], role="owner")
+            st.success("Group created.")
+            goto_group(gid)
 
 # ------------ Group page ------------
 def render_group_page(gid: int):
@@ -1285,7 +1355,7 @@ except Exception as e:
     st.error(f"Database init failed: {e}")
     st.stop()
 
-# Top nav (now wired to real routes)
+# Top nav
 nav1, nav2, nav3, navsp = st.columns([1,1,1,6])
 with nav1:
     if st.button("🗺️ Explore", use_container_width=True):
@@ -1320,7 +1390,6 @@ elif route == "community":
 elif route == "profile":
     render_profile(me)
 else:
-    # explore (anonymous allowed)
     render_explore(me)
 
 # Footer
