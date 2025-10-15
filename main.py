@@ -27,22 +27,24 @@ from PIL import Image
 # App constants & branding
 # =========================
 APP_NAME = "Health Path"
+
+# Use the logo path you provided; allow override via env
 LOGO_PATH = os.getenv(
     "APP_LOGO_PATH",
-    "/mnt/data/a7b5a7b4-b1aa-46c5-97bf-3cc5-97bf-3cc5e8a0d839.png".replace("97bf-3cc5", "97bf-3cc5e8a0d839")  # resilient to any copy
+    "/mnt/data/0c2e0253-4ec4-4056-b34c-10ea6815d70c.png"
 )
 
-# Try to load logo as page icon
-_logo_img = None
+# Load logo
+_page_icon = None
 try:
     if os.path.exists(LOGO_PATH):
-        _logo_img = Image.open(LOGO_PATH)
+        _page_icon = Image.open(LOGO_PATH)
 except Exception:
-    _logo_img = None
+    _page_icon = None
 
 st.set_page_config(
     page_title=f"{APP_NAME} — Sensitivity-aware + Community",
-    page_icon=_logo_img if _logo_img else "🩺",
+    page_icon=_page_icon if _page_icon else "🩺",
     layout="wide",
 )
 
@@ -57,33 +59,63 @@ st.markdown("""
   --hp-primary:#1273EA;
   --hp-primary-600:#0F5DC0;
   --hp-primary-700:#0C4D9E;
-  --hp-muted:#64748b;
+  --hp-teal:#21C2A6;
+  --hp-bg:#F7FBFF;
+  --hp-card:#ffffff;
+  --hp-muted:#6b7280;
+  --hp-ring:#dbeafe;
 }
 html, body, [data-testid="stAppViewContainer"] {
   font-family: "Inter", system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial;
+  background: var(--hp-bg);
 }
 .smallcaps{font-variant:all-small-caps;color:var(--hp-muted);}
 .muted{color:var(--hp-muted);}
+.hp-chip{display:inline-block;background:#EEF6FF;color:#11407F;border:1px solid #DCEBFF;
+  padding:.15rem .5rem;border-radius:999px;font-size:.8rem;margin-right:.25rem;margin-bottom:.25rem;}
+.hp-badge{display:inline-block;background:#F1F5F9;color:#0f172a;border:1px solid #E2E8F0;
+  padding:.15rem .45rem;border-radius:8px;font-size:.8rem;margin-right:.25rem;margin-bottom:.25rem;}
+.hp-card{
+  background:var(--hp-card);
+  border:1px solid #e5e7eb;
+  border-radius:14px;
+  padding:14px 14px 12px 14px;
+  box-shadow:0 8px 24px rgba(2,8,23,.06);
+  margin-bottom:12px;
+}
+.hp-card h4{margin:.1rem 0 .25rem 0;}
+.hp-hr{height:1px;background:#e5e7eb;margin:8px 0 12px 0;border:0;}
+
+div[data-testid="stForm"] {background:var(--hp-card); border:1px solid #e5e7eb; border-radius:14px; padding:14px; box-shadow:0 8px 24px rgba(2,8,23,.05);}
+
+/* top spacing fixes */
 div[data-testid="column"] > div:has(input),
 div[data-testid="column"] > div:has(button),
 div[data-testid="column"] > div:has(div[role="slider"]) { margin-top: 0 !important; }
 
 /* Sticky brand header */
-.hp-header{position:sticky;top:0;z-index:999;margin:-1.2rem -1rem 1rem -1rem;padding:.75rem 1rem .55rem 1rem;
-  background:linear-gradient(90deg,#21C2A6 0%, #1273EA 100%);box-shadow:0 2px 12px rgba(0,0,0,.1);}
+.hp-header{position:sticky;top:0;z-index:999;margin:-1.2rem -1rem 1rem -1rem;padding:.55rem 1rem .55rem 1rem;
+  background:linear-gradient(90deg,var(--hp-teal) 0%, var(--hp-primary) 100%);box-shadow:0 3px 18px rgba(0,0,0,.12);}
 .hp-header-row{display:flex;align-items:center;gap:14px;flex-wrap:wrap;}
-.hp-brand{display:flex;align-items:center;gap:10px;}
+.hp-brand{display:flex;align-items:center;gap:12px;}
 .hp-title{display:flex;flex-direction:column;}
 .hp-title h1{font-family:"Nunito",Inter,sans-serif;font-weight:800;font-size:24px;line-height:1.1;color:#fff;margin:0;}
-.hp-title small{color:#ECFEFF;opacity:.9;font-weight:500;}
+.hp-title small{color:#ECFEFF;opacity:.92;font-weight:500;}
 .hp-nav{margin-left:auto;display:flex;gap:8px;flex-wrap:wrap;}
-.hp-nav button[kind="secondary"]{border:0;background:rgba(255,255,255,.18)!important;color:#fff!important;padding:.45rem .8rem;border-radius:10px;}
-.hp-nav .active{background:#fff!important;color:var(--hp-primary)!important;font-weight:700;}
-.stButton > button[kind="primary"]{background:var(--hp-primary);border:1px solid var(--hp-primary-700);color:#fff;font-weight:600;border-radius:10px;padding:.5rem .9rem;}
+.hp-btn{border:0;background:rgba(255,255,255,.16);color:#fff;padding:.45rem .9rem;border-radius:10px;font-weight:600;cursor:pointer;}
+.hp-btn:hover{background:rgba(255,255,255,.28);}
+.hp-btn.active{background:#fff;color:var(--hp-primary);}
+
+/* Streamlit primary button */
+.stButton > button[kind="primary"]{
+  background:var(--hp-primary);
+  border:1px solid var(--hp-primary-700);
+  color:#fff;font-weight:600;border-radius:10px;padding:.5rem .9rem;
+}
 .stButton > button[kind="primary"]:hover{background:var(--hp-primary-600);}
 
-/* DataFrame polish */
-[data-testid="stDataFrame"]{border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;}
+/* dataframe polish */
+[data-testid="stDataFrame"]{border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;background:#fff;}
 [data-testid="stDataFrame"] .row_heading,[data-testid="stDataFrame"] .blank{display:none;}
 </style>
 """, unsafe_allow_html=True)
@@ -91,7 +123,7 @@ div[data-testid="column"] > div:has(div[role="slider"]) { margin-top: 0 !importa
 # =========================
 # HTTP session (polite)
 # =========================
-APP_USER_AGENT = "HealthPath/4.0 (contact: contact@example.com)"
+APP_USER_AGENT = "HealthPath/5.0 (contact: contact@example.com)"
 OSM_HEADERS = {"User-Agent": APP_USER_AGENT, "Accept-Language": "en"}
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
@@ -190,7 +222,6 @@ def init_db():
       FOREIGN KEY(outing_id) REFERENCES outings(id),
       FOREIGN KEY(user_id) REFERENCES users(id)
     );
-    -- Group posts (simple chat)
     CREATE TABLE IF NOT EXISTS posts(
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       group_id INTEGER NOT NULL,
@@ -265,7 +296,6 @@ def delete_group(gid, requester_id):
     if not g or g["owner_id"] != requester_id:
         return False
     conn = db(); cur = conn.cursor()
-    # cascade deletes (simple manual cascade)
     cur.execute("DELETE FROM comments WHERE post_id IN (SELECT id FROM posts WHERE group_id=?)", (gid,))
     cur.execute("DELETE FROM posts WHERE group_id=?", (gid,))
     cur.execute("DELETE FROM rsvps WHERE outing_id IN (SELECT id FROM outings WHERE group_id=?)", (gid,))
@@ -774,13 +804,13 @@ def set_route(r):
 # =========================
 def render_app_header(active_route: str):
     st.markdown('<div class="hp-header">', unsafe_allow_html=True)
-    left, middle, right = st.columns([0.12, 0.74, 0.14])
-    with left:
-        if _logo_img:
-            st.image(_logo_img, use_container_width=False, width=48)
+    col_logo, col_title, col_nav = st.columns([0.12, 0.74, 0.14])
+    with col_logo:
+        if os.path.exists(LOGO_PATH):
+            st.image(LOGO_PATH, use_container_width=False, width=48)
         else:
             st.markdown("### 🩺")
-    with middle:
+    with col_title:
         st.markdown(
             """
             <div class="hp-title">
@@ -789,49 +819,55 @@ def render_app_header(active_route: str):
             </div>
             """, unsafe_allow_html=True
         )
-    with right:
-        st.markdown('<div class="hp-nav">', unsafe_allow_html=True)
-        c1,c2,c3 = st.columns(3)
-        with c1:
-            if st.button("Explore", key="nav_explore", type="secondary", use_container_width=True):
-                set_route("explore")
-        with c2:
-            if st.button("Community", key="nav_comm", type="secondary", use_container_width=True):
-                set_route("community")
-        with c3:
-            if st.button("My Profile", key="nav_prof", type="secondary", use_container_width=True):
-                set_route("profile")
-        st.markdown('</div>', unsafe_allow_html=True)
+    with col_nav:
+        # custom buttons to ensure active state without fragile JS dependencies
+        a_ex = st.session_state.get("route") == "explore"
+        a_co = st.session_state.get("route") == "community"
+        a_pr = st.session_state.get("route") == "profile"
 
-    # Simple active styling: inject script to mark the active button
-    active_idx = {"explore":1,"community":2,"profile":3}.get(active_route, 1)
-    st.markdown(
-        """
-        <script>
-          const idx = %d;
-          const btns = window.parent.document.querySelectorAll('button[kind="secondary"]');
-          if (btns && btns.length >= 3){
-            btns.forEach(b=>b.classList.remove('active'));
-            btns[idx-1].classList.add('active');
-          }
-        </script>
-        """ % active_idx,
-        unsafe_allow_html=True
-    )
+        b1, b2, b3 = st.columns(3)
+        with b1:
+            clicked = st.button("Explore", key="nav_explore", use_container_width=True)
+            if clicked: set_route("explore")
+            st.markdown('<div class="hp-nav"></div>', unsafe_allow_html=True)
+        with b2:
+            clicked = st.button("Community", key="nav_comm", use_container_width=True)
+            if clicked: set_route("community")
+        with b3:
+            clicked = st.button("My Profile", key="nav_prof", use_container_width=True)
+            if clicked: set_route("profile")
+
+        # apply active styles by injecting a small script that toggles class on the three nav buttons
+        active_idx = {"explore":1,"community":2,"profile":3}.get(active_route, 1)
+        st.markdown(
+            """
+            <script>
+              const idx = %d;
+              const sroot = window.parent.document;
+              const btns = Array.from(sroot.querySelectorAll('button[kind="secondary"], button[class*="st-emotion-cache"]')).filter(b => /Explore|Community|My Profile/.test(b.innerText));
+              btns.forEach((b,i)=>{ b.classList.remove('hp-btn','active'); b.classList.add('hp-btn'); if(i===idx-1){ b.classList.add('active'); }});
+            </script>
+            """ % active_idx,
+            unsafe_allow_html=True
+        )
+
     st.markdown('</div>', unsafe_allow_html=True)
 
 # Render header
 render_app_header(st.session_state.get("route","explore"))
 
 # =========================
-# Auth widgets (inline where needed)
+# Auth widgets
 # =========================
 def render_auth_gate():
     """Return True if logged in, else render login/signup and return False."""
     if st.session_state.user_id is not None:
         return True
+    st.markdown("#### Welcome to Health Path")
+    st.caption("Create an account to join groups, post, and RSVP to outings. You can still use Explore without an account.")
     colL, colR = st.columns(2)
     with colL:
+        st.markdown('<div class="hp-card">', unsafe_allow_html=True)
         st.subheader("Log in")
         with st.form("login_form"):
             li_user = st.text_input("Username")
@@ -841,11 +877,14 @@ def render_auth_gate():
             uid = authenticate(li_user.strip(), li_pw)
             if uid:
                 st.session_state.user_id = uid
+                st.toast("Logged in ✅", icon="✅")
                 safe_rerun()
             else:
                 st.error("Invalid username or password.")
+        st.markdown('</div>', unsafe_allow_html=True)
 
     with colR:
+        st.markdown('<div class="hp-card">', unsafe_allow_html=True)
         st.subheader("Sign up")
         with st.form("signup_form"):
             su_user = st.text_input("Username (unique)")
@@ -862,46 +901,45 @@ def render_auth_gate():
                 try:
                     uid = create_user(su_user.strip(), su_email.strip() or None, su_pw1)
                     st.session_state.user_id = uid
-                    st.success("Welcome! Account created.")
+                    st.toast("Welcome! Account created 🎉", icon="🎉")
                     safe_rerun()
                 except sqlite3.IntegrityError:
                     st.error("Username or email already exists.")
+        st.markdown('</div>', unsafe_allow_html=True)
     return False
 
 # =========================
-# EXPLORE
+# EXPLORE PAGE
 # =========================
 def page_explore():
-    st.markdown("### 🔍 Search near you")
+    st.markdown("### 🔍 Explore activities near you")
 
-    # Load defaults from profile, if any
+    # Defaults from profile
     default_sens = []
     default_inc = set()
     if st.session_state.user_id:
         me = get_user(st.session_state.user_id)
-        try:
-            default_sens = json.loads(me.get("sensitivities") or "[]")
-        except Exception:
-            default_sens = []
-        try:
-            default_inc = set(json.loads(me.get("activities") or "[]"))
-        except Exception:
-            default_inc = set()
+        try: default_sens = json.loads(me.get("sensitivities") or "[]")
+        except Exception: default_sens = []
+        try: default_inc = set(json.loads(me.get("activities") or "[]"))
+        except Exception: default_inc = set()
 
-    col1, col2, col3 = st.columns([3, 1.6, 2.8])
-    with col1:
-        address = st.text_input("City / address / ZIP", value="Portland, ME",
-                                label_visibility="collapsed",
-                                placeholder="e.g., 02139 or 'Portland, ME'")
-    with col2:
-        radius_km = st.slider("Radius (km)", 2, 30, 10, 1, label_visibility="collapsed")
-    with col3:
-        sensitivities = st.multiselect(
-            "Sensitivities (choose any)",
-            ["UV sensitivity","Pollen sensitivity","Breathing sensitivity","Smog sensitivity",
-             "Low impact","Noise sensitivity","Privacy","Accessibility"],
-            default=default_sens or ["UV sensitivity","Pollen sensitivity"]
-        )
+    # Search Row
+    col1, col2, col3 = st.columns([3, 1.4, 2.8])
+    with st.container():
+        with col1:
+            address = st.text_input("City / address / ZIP", value="Portland, ME",
+                                    label_visibility="collapsed",
+                                    placeholder="e.g., 02139 or 'Portland, ME'")
+        with col2:
+            radius_km = st.slider("Radius (km)", 2, 30, 10, 1, label_visibility="collapsed")
+        with col3:
+            sensitivities = st.multiselect(
+                "Sensitivities (choose any)",
+                ["UV sensitivity","Pollen sensitivity","Breathing sensitivity","Smog sensitivity",
+                 "Low impact","Noise sensitivity","Privacy","Accessibility"],
+                default=default_sens or ["UV sensitivity","Pollen sensitivity"]
+            )
 
     ALL_ACTIVITIES = [
         "Walking","Hiking","Running","Cycling","Swimming","Museums",
@@ -910,10 +948,9 @@ def page_explore():
         "Tracks","Greenways","Free","Paid"
     ]
 
-    with st.expander("Include / Exclude activities by type"):
-        st.caption("Select activities to include and/or exclude. If both picked, exclusion wins.")
-        cols_inc = st.columns(3)
-        cols_exc = st.columns(3)
+    with st.expander("Include / Exclude activities by type", expanded=False):
+        st.caption("Select activities to include and/or exclude. If both selected for the same item, exclusion wins.")
+        cols_inc = st.columns(3); cols_exc = st.columns(3)
         include_flags, exclude_flags = {}, {}
         for i, act in enumerate(ALL_ACTIVITIES):
             with cols_inc[i % 3]:
@@ -943,6 +980,7 @@ def page_explore():
 
     colA, colB = st.columns([2,3])
     with colA:
+        st.markdown('<div class="hp-card">', unsafe_allow_html=True)
         st.subheader("Location")
         st.write(loc["display_name"])
         st.write(f"Lat/Lon: {lat:.5f}, {lon:.5f}")
@@ -952,9 +990,11 @@ def page_explore():
         st.markdown("**Suggested times today** (local):")
         st.write(format_window_str(windows))
         if weather_ctx.get("notes"):
+            st.markdown('<div class="hp-hr"></div>', unsafe_allow_html=True)
             with st.expander("Weather notes"):
                 for n in weather_ctx["notes"]:
                     st.write("• " + n)
+        st.markdown('</div>', unsafe_allow_html=True)
 
     with colB:
         st.subheader("Public resources nearby")
@@ -996,44 +1036,51 @@ def page_explore():
             return
 
         def make_badges(r):
-            b=[]
-            if r["indoor"]: b.append("indoor")
-            if r["shaded_possible"]: b.append("shaded")
-            if r["waterfront"]: b.append("waterfront")
-            if r["paved"]: b.append("paved")
-            if r["wheelchair"]: b.append("wheelchair")
-            if r["pollen_risk"]=="low": b.append("low-pollen")
-            elif r["pollen_risk"]=="higher": b.append("higher-pollen")
-            if r.get("is_free") is True: b.append("free")
-            if r.get("is_paid") is True: b.append("paid")
+            chips=[]
+            if r["indoor"]: chips.append('<span class="hp-chip">indoor</span>')
+            if r["shaded_possible"]: chips.append('<span class="hp-chip">shaded</span>')
+            if r["waterfront"]: chips.append('<span class="hp-chip">waterfront</span>')
+            if r["paved"]: chips.append('<span class="hp-chip">paved</span>')
+            if r["wheelchair"]: chips.append('<span class="hp-chip">wheelchair</span>')
+            if r["pollen_risk"]=="low": chips.append('<span class="hp-chip">low-pollen</span>')
+            elif r["pollen_risk"]=="higher": chips.append('<span class="hp-chip">higher-pollen</span>')
+            if r.get("is_free") is True: chips.append('<span class="hp-chip">free</span>')
+            if r.get("is_paid") is True: chips.append('<span class="hp-chip">paid</span>')
             if r.get("road_distance_m") is not None:
-                if r["road_distance_m"] > 350: b.append("away from traffic")
-                elif r["road_distance_m"] < 120: b.append("near traffic")
-            return ", ".join(b)
-        features["badges"] = features.apply(make_badges, axis=1)
+                if r["road_distance_m"] > 350: chips.append('<span class="hp-chip">away from traffic</span>')
+                elif r["road_distance_m"] < 120: chips.append('<span class="hp-chip">near traffic</span>')
+            return " ".join(chips)
+
+        # Table summary
         features = features.sort_values(["score","distance_km"], ascending=[False, True]).reset_index(drop=True)
         features["activities_list"] = features["activities"].apply(lambda s: ", ".join(sorted(s)) if s else "—")
 
-        tbl = features[["name","kind","activities_list","distance_km","road_distance_m","badges","score"]].copy()
+        tbl = features[["name","kind","activities_list","distance_km","road_distance_m","score"]].copy()
         tbl["distance_km"] = tbl["distance_km"].map(lambda x: f"{x:.2f} km")
         tbl["road_distance_m"] = tbl["road_distance_m"].map(lambda x: (f"{int(x)} m" if pd.notna(x) else "—"))
         st.dataframe(tbl, hide_index=True, use_container_width=True)
+
+        st.markdown('<div class="hp-hr"></div>', unsafe_allow_html=True)
+        with st.container():
+            for _, r in features.head(12).iterrows():
+                with st.container():
+                    st.markdown('<div class="hp-card">', unsafe_allow_html=True)
+                    st.markdown(f"**{r['name']}** &nbsp;·&nbsp; _{r['kind']}_")
+                    st.caption(f"{r['distance_km']:.2f} km away  •  Score: {r['score']:.0f}")
+                    st.markdown(make_badges(r), unsafe_allow_html=True)
+                    st.markdown('</div>', unsafe_allow_html=True)
 
         csv = features.drop(columns=["tags"]).to_csv(index=False)
         st.download_button("Download results (CSV)", csv, "activities.csv", "text/csv")
 
     # Map
     st.subheader("Map")
-    _safe_cols = ["lat","lon","name","distance_km","score","activities_list","badges","road_distance_m"]
+    _safe_cols = ["lat","lon","name","distance_km","score","activities_list"]
     map_df = features[_safe_cols].copy()
     for c in ["lat","lon","distance_km","score"]:
         map_df[c] = map_df[c].astype(float)
-    map_df["activities_list"] = map_df["activities_list"].astype(str)
-    map_df["badges"] = map_df["badges"].astype(str)
-    map_df["road_distance_m"] = map_df["road_distance_m"].apply(lambda x: None if pd.isna(x) else float(x))
     def _fmt_tooltip(r):
-        rd = "—" if (r.get("road_distance_m") is None) else f"{int(r['road_distance_m'])} m"
-        return f"{r['name']} — score {r['score']:.0f}\nActivities: {r['activities_list']}\nAttributes: {r['badges']}\n{r['distance_km']:.2f} km away | Road: {rd}"
+        return f"{r['name']} — score {r['score']:.0f}\\nActivities: {r['activities_list']}\\n{r['distance_km']:.2f} km away"
     map_df["tooltip"] = map_df.apply(_fmt_tooltip, axis=1)
 
     initial_view = pdk.ViewState(latitude=float(lat), longitude=float(lon), zoom=12, pitch=0)
@@ -1045,7 +1092,7 @@ def page_explore():
     st.pydeck_chart(deck)
 
 # =========================
-# COMMUNITY
+# COMMUNITY PAGE
 # =========================
 def page_community():
     st.markdown("### 👥 Community: Groups, Outings & Posts")
@@ -1054,97 +1101,92 @@ def page_community():
         return
 
     me = get_user(st.session_state.user_id)
-    st.success(f"Logged in as **{me['username']}**")
-    lcol, rcol = st.columns([1,6])
-    with lcol:
+    top = st.columns([1,6,1])
+    with top[0]:
+        if st.button("← Explore"):
+            set_route("explore")
+    with top[2]:
         if st.button("Log out"):
             st.session_state.user_id = None
             safe_rerun()
-    with rcol:
-        st.caption("")
 
-    # Search by city (preferred) or name fallback
-    q = st.text_input("Search by city (or name)", value="")
+    q = st.text_input("Search by city (preferred) or name", value="")
     all_groups = list_groups(q)
 
-    # Partition: my groups vs others
-    my_memberships = {g["id"]: g for g in my_groups(me["id"])}
-    my_cards, other_cards = [], []
-    for g in all_groups:
-        if g["id"] in my_memberships:
-            my_cards.append(g)
-        else:
-            other_cards.append(g)
+    memberships = {g["id"]: g for g in my_groups(me["id"])}
+    my_cards = [g for g in all_groups if g["id"] in memberships]
+    other_cards = [g for g in all_groups if g["id"] not in memberships]
 
-    # Helper: group card with next outing
     def render_group_card(gdict):
-        with st.container(border=True):
+        with st.container():
+            st.markdown('<div class="hp-card">', unsafe_allow_html=True)
             gid = gdict["id"]
             tags = ", ".join(json.loads(gdict.get("tags") or "[]")) or "—"
             nxt = next_outing(gid)
-            nxt_txt = "Next outing: —"
             if nxt:
                 try:
                     loc = nxt.get("location_name") or "TBD"
                     dt = datetime.fromisoformat(nxt["time_utc"]).astimezone(pytz.timezone("UTC"))
                     nxt_txt = f"Next outing: {dt.strftime('%b %d %Y %H:%M UTC')} @ {loc}"
                 except Exception:
-                    pass
+                    nxt_txt = "Next outing: —"
+            else:
+                nxt_txt = "Next outing: —"
 
-            st.markdown(f"**{gdict['name']}**  \nCity: {gdict.get('city') or '—'} • Owner: {gdict['owner_name']}  \n_Tags:_ {tags}")
+            st.markdown(f"### {gdict['name']}")
+            st.caption(f"City: {gdict.get('city') or '—'} • Owner: {gdict['owner_name']} • Tags: {tags}")
             st.caption(nxt_txt)
-
-            b1,b2,b3,b4 = st.columns(4)
-            with b1:
-                if st.button("View", key=f"view_g_{gid}"):
+            c1, c2, c3, c4 = st.columns(4)
+            with c1:
+                if st.button("Open", key=f"view_g_{gid}"):
                     st.session_state["view_group_id"] = gid
                     safe_rerun()
-            with b2:
+            with c2:
                 if not is_member(gid, me["id"]):
                     if st.button("Join", key=f"join_g_{gid}"):
                         join_group(gid, me["id"])
-                        st.success("Joined group.")
+                        st.toast("Joined group", icon="✅")
                         st.session_state["view_group_id"] = gid
                         safe_rerun()
                 else:
                     if st.button("Leave", key=f"leave_g_{gid}"):
                         leave_group(gid, me["id"])
-                        st.warning("Left group.")
+                        st.toast("Left group", icon="⚠️")
                         if st.session_state.get("view_group_id") == gid:
                             st.session_state["view_group_id"] = None
                         safe_rerun()
-            with b3:
+            with c3:
                 if gdict["owner_id"] == me["id"]:
                     if st.button("Delete", key=f"del_g_{gid}"):
-                        ok = delete_group(gid, me["id"])
-                        if ok:
-                            st.success("Group deleted.")
+                        if delete_group(gid, me["id"]):
+                            st.toast("Group deleted", icon="🗑️")
                             if st.session_state.get("view_group_id") == gid:
                                 st.session_state["view_group_id"] = None
                             safe_rerun()
                         else:
                             st.error("Only the owner can delete this group.")
-            with b4:
+            with c4:
                 pass
+            st.markdown('</div>', unsafe_allow_html=True)
 
-    # My groups section
     st.markdown("#### Your groups")
     if not my_cards:
         st.info("You haven't joined any groups yet.")
     else:
-        for g in my_cards[:50]:
-            render_group_card(g)
+        cols = st.columns(2)
+        for i, g in enumerate(my_cards[:50]):
+            with cols[i % 2]:
+                render_group_card(g)
 
-    st.markdown("---")
     st.markdown("#### All groups")
     if not other_cards:
         st.info("No other groups found.")
     else:
-        for g in other_cards[:100]:
-            render_group_card(g)
+        cols = st.columns(2)
+        for i, g in enumerate(other_cards[:100]):
+            with cols[i % 2]:
+                render_group_card(g)
 
-    st.markdown("---")
-    # Create group
     st.markdown("#### Create a new group")
     with st.form("new_group"):
         gn = st.text_input("Group name")
@@ -1159,7 +1201,7 @@ def page_community():
             tags = [t.strip() for t in gt.split(",") if t.strip()] if gt else []
             gid = create_group(gn.strip(), gd.strip(), gc.strip(), tags, me["id"])
             join_group(gid, me["id"], role="owner")
-            st.success("Group created.")
+            st.toast("Group created 🎉", icon="🎉")
             st.session_state["view_group_id"] = gid
             safe_rerun()
 
@@ -1179,7 +1221,6 @@ def page_community():
 
     mem = is_member(g["id"], me["id"])
 
-    # Columns: Outings & Feed / Create
     cols = st.columns([2,2])
     with cols[0]:
         st.markdown("#### Outings")
@@ -1188,31 +1229,32 @@ def page_community():
             st.info("No outings yet. Be the first to create one!")
         else:
             for o in outings:
-                with st.container(border=True):
-                    local_tz = pytz.timezone(guess_timezone(o["lat"], o["lon"])) if (o.get("lat") and o.get("lon")) else pytz.timezone("UTC")
-                    try:
-                        dt = datetime.fromisoformat(o["time_utc"]).astimezone(local_tz)
-                        dt_str = dt.strftime('%b %d, %Y %I:%M %p %Z')
-                    except Exception:
-                        dt_str = o["time_utc"]
-                    st.markdown(f"**{o['title']}** — {dt_str}")
-                    st.caption(f"Where: {o.get('location_name') or 'TBD'} • Host: {o['creator']} • Max: {o.get('max_people') or '—'}")
-                    if o.get("notes"): st.write(o["notes"])
-                    counts = rsvp_counts(o["id"])
-                    st.caption(f"RSVPs — going: {counts.get('going',0)}, maybe: {counts.get('maybe',0)}, not going: {counts.get('not_going',0)}")
-                    if mem:
-                        b1, b2, b3 = st.columns(3)
-                        with b1:
-                            if st.button("I'm going", key=f"go_{o['id']}"):
-                                rsvp(o["id"], me["id"], "going"); safe_rerun()
-                        with b2:
-                            if st.button("Maybe", key=f"maybe_{o['id']}"):
-                                rsvp(o["id"], me["id"], "maybe"); safe_rerun()
-                        with b3:
-                            if st.button("Not going", key=f"ng_{o['id']}"):
-                                rsvp(o["id"], me["id"], "not_going"); safe_rerun()
-                    else:
-                        st.caption("Join this group to RSVP.")
+                st.markdown('<div class="hp-card">', unsafe_allow_html=True)
+                local_tz = pytz.timezone(guess_timezone(o["lat"], o["lon"])) if (o.get("lat") and o.get("lon")) else pytz.timezone("UTC")
+                try:
+                    dt = datetime.fromisoformat(o["time_utc"]).astimezone(local_tz)
+                    dt_str = dt.strftime('%b %d, %Y %I:%M %p %Z')
+                except Exception:
+                    dt_str = o["time_utc"]
+                st.markdown(f"**{o['title']}** — {dt_str}")
+                st.caption(f"Where: {o.get('location_name') or 'TBD'} • Host: {o['creator']} • Max: {o.get('max_people') or '—'}")
+                if o.get("notes"): st.write(o["notes"])
+                counts = rsvp_counts(o["id"])
+                st.caption(f"RSVPs — going: {counts.get('going',0)}, maybe: {counts.get('maybe',0)}, not going: {counts.get('not_going',0)}")
+                if mem:
+                    b1, b2, b3 = st.columns(3)
+                    with b1:
+                        if st.button("I'm going", key=f"go_{o['id']}"):
+                            rsvp(o["id"], me["id"], "going"); st.toast("RSVP saved", icon="✅"); safe_rerun()
+                    with b2:
+                        if st.button("Maybe", key=f"maybe_{o['id']}"):
+                            rsvp(o["id"], me["id"], "maybe"); st.toast("RSVP saved", icon="✅"); safe_rerun()
+                    with b3:
+                        if st.button("Not going", key=f"ng_{o['id']}"):
+                            rsvp(o["id"], me["id"], "not_going"); st.toast("RSVP saved", icon="✅"); safe_rerun()
+                else:
+                    st.caption("Join this group to RSVP.")
+                st.markdown('</div>', unsafe_allow_html=True)
 
     with cols[1]:
         st.markdown("#### Create outing")
@@ -1245,10 +1287,9 @@ def page_community():
                     dt_local = tz.localize(dt_local)
                     time_utc = dt_local.astimezone(pytz.utc).isoformat()
                     create_outing(g["id"], t_title.strip(), time_utc, loc_o, lat_o, lon_o, (int(t_max) or None), t_notes.strip(), me["id"])
-                    st.success("Outing created.")
+                    st.toast("Outing created 🎉", icon="🎉")
                     safe_rerun()
 
-    # Group posts
     st.markdown("#### Group feed")
     if not mem:
         st.info("Join the group to read and post.")
@@ -1258,7 +1299,7 @@ def page_community():
             post_go = st.form_submit_button("Post")
         if post_go and body.strip():
             create_post(g["id"], me["id"], body.strip())
-            st.success("Posted!")
+            st.toast("Posted!", icon="✅")
             safe_rerun()
 
         posts = list_posts(g["id"])
@@ -1266,34 +1307,41 @@ def page_community():
             st.caption("No posts yet.")
         else:
             for p in posts:
-                with st.container(border=True):
-                    st.markdown(f"**{p['username']}** — _{p['created_at']}_")
-                    st.write(p["body"])
-                    # comments
-                    cmts = list_comments(p["id"])
-                    if cmts:
-                        for c in cmts:
-                            st.caption(f"↳ {c['username']} — {c['created_at']}")
-                            st.text(c["body"])
-                    with st.form(f"cmt_{p['id']}"):
-                        cbody = st.text_input("Reply", placeholder="Write a reply…")
-                        cgo = st.form_submit_button("Send")
-                    if cgo and cbody.strip():
-                        add_comment(p["id"], me["id"], cbody.strip())
-                        safe_rerun()
+                st.markdown('<div class="hp-card">', unsafe_allow_html=True)
+                st.markdown(f"**{p['username']}** — _{p['created_at']}_")
+                st.write(p["body"])
+                # comments
+                cmts = list_comments(p["id"])
+                if cmts:
+                    for c in cmts:
+                        st.caption(f"↳ {c['username']} — {c['created_at']}")
+                        st.text(c["body"])
+                with st.form(f"cmt_{p['id']}"):
+                    cbody = st.text_input("Reply", placeholder="Write a reply…")
+                    cgo = st.form_submit_button("Send")
+                if cgo and cbody.strip():
+                    add_comment(p["id"], me["id"], cbody.strip())
+                    st.toast("Reply posted", icon="💬")
+                    safe_rerun()
+                st.markdown('</div>', unsafe_allow_html=True)
 
 # =========================
-# PROFILE
+# PROFILE PAGE
 # =========================
 def page_profile():
     st.markdown("### 👤 My Profile")
     if not render_auth_gate():
         return
     me = get_user(st.session_state.user_id)
-    st.success(f"Logged in as **{me['username']}**")
-    if st.button("Log out"):
-        st.session_state.user_id = None
-        safe_rerun()
+
+    top = st.columns([1,6,1])
+    with top[0]:
+        if st.button("← Explore"):
+            set_route("explore")
+    with top[2]:
+        if st.button("Log out"):
+            st.session_state.user_id = None
+            safe_rerun()
 
     my_sens = []
     my_acts = []
@@ -1320,28 +1368,25 @@ def page_profile():
         savep = st.form_submit_button("Save profile")
     if savep:
         update_profile(me["id"], bio, p_sens, p_acts)
-        st.success("Profile updated. Your Explore defaults will reflect these.")
+        st.toast("Profile updated", icon="✅")
 
-    st.markdown("---")
     st.markdown("#### Your group memberships")
     mg = my_groups(me["id"])
     if not mg:
         st.caption("You haven't joined any groups yet.")
     else:
         for g in mg:
-            with st.container(border=True):
-                gid = g["id"]
-                st.markdown(f"**{g['name']}** — role: {g['role']} — City: {g.get('city') or '—'}")
-                colb = st.columns(3)
-                with colb[0]:
-                    if st.button("Open group", key=f"open_{gid}"):
-                        st.session_state["view_group_id"] = gid
-                        set_route("community")
-                with colb[1]:
-                    if g["owner_id"] == me["id"]:
-                        st.caption("You are the owner")
-                with colb[2]:
-                    pass
+            st.markdown('<div class="hp-card">', unsafe_allow_html=True)
+            gid = g["id"]
+            st.markdown(f"**{g['name']}** — role: {g['role']} — City: {g.get('city') or '—'}")
+            b1,b2 = st.columns(2)
+            with b1:
+                if st.button("Open group", key=f"open_{gid}"):
+                    st.session_state["view_group_id"] = gid
+                    set_route("community")
+            with b2:
+                pass
+            st.markdown('</div>', unsafe_allow_html=True)
 
 # =========================
 # Router
