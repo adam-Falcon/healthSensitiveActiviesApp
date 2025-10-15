@@ -694,13 +694,18 @@ if "view_group_id" not in st.session_state:
 tab_explore, tab_community = st.tabs(["🗺️ Explore", "👥 Community"])
 
 # ============================================================
-# EXPLORE TAB
+# EXPLORE TAB  (no st.stop() here!)
 # ============================================================
 with tab_explore:
     st.markdown("### 🔍 Search near you")
     col1, col2, col3 = st.columns([3, 1.6, 2.8])
     with col1:
-        address = st.text_input("City / address / ZIP", value="Portland, ME", label_visibility="collapsed", placeholder="e.g., 02139 or 'Portland, ME'")
+        address = st.text_input(
+            "City / address / ZIP",
+            value="Portland, ME",
+            label_visibility="collapsed",
+            placeholder="e.g., 02139 or 'Portland, ME'"
+        )
     with col2:
         radius_km = st.slider("Radius (km)", 2, 30, 10, 1, label_visibility="collapsed")
     with col3:
@@ -738,125 +743,130 @@ with tab_explore:
 
     go = st.button("Search", type="primary")
 
+    # --- Only run the search if requested; never stop the whole script
+    search_ok = False
+    features = None
+    lat = lon = None
+
     if not go:
         st.info("Enter a location, choose sensitivities and activities, then click **Search**.")
-        st.stop()
+    else:
+        if not address.strip():
+            st.error("Please enter a city/address/ZIP.")
+        else:
+            loc = geocode_address(address.strip())
+            if not loc:
+                st.error("Couldn't geocode that location. Try a nearby city or ZIP.")
+            else:
+                lat, lon = loc["lat"], loc["lon"]
+                tzname = guess_timezone(lat, lon)
+                keys = load_optional_keys()
 
-    if not address.strip():
-        st.error("Please enter a city/address/ZIP.")
-        st.stop()
+                colA, colB = st.columns([2, 3])
+                with colA:
+                    st.subheader("Location")
+                    st.write(loc["display_name"])
+                    st.write(f"Lat/Lon: {lat:.5f}, {lon:.5f}")
+                    st.write(f"Timezone: {tzname}")
+                    weather_ctx = fetch_weather_context(lat, lon, tzname, keys)
+                    windows = build_time_windows(weather_ctx, set(sensitivities))
+                    st.markdown("**Suggested times today** (local):")
+                    st.write(format_window_str(windows))
+                    if weather_ctx.get("notes"):
+                        with st.expander("Weather notes"):
+                            for n in weather_ctx["notes"]:
+                                st.write("• " + n)
 
-    loc = geocode_address(address.strip())
-    if not loc:
-        st.error("Couldn't geocode that location. Try a nearby city or ZIP.")
-        st.stop()
+                with colB:
+                    st.subheader("Public resources nearby")
+                    with st.spinner("Querying OpenStreetMap for places..."):
+                        places = fetch_places(lat, lon, radius_km)
+                        roads  = fetch_roads(lat, lon, radius_km)
 
-    lat, lon = loc["lat"], loc["lon"]
-    tzname = guess_timezone(lat, lon)
-    keys = load_optional_keys()
+                    if places.empty:
+                        st.warning("No public activity places found within that radius. Try enlarging the search.")
+                    else:
+                        def nearest_road_m(latp, lonp):
+                            if roads is None or roads.empty: return None
+                            dmins = [haversine_km(latp, lonp, rlat, rlon)*1000 for rlat, rlon in zip(roads["lat"].values, roads["lon"].values)]
+                            return min(dmins) if dmins else None
 
-    colA, colB = st.columns([2, 3])
-    with colA:
-        st.subheader("Location")
-        st.write(loc["display_name"])
-        st.write(f"Lat/Lon: {lat:.5f}, {lon:.5f}")
-        st.write(f"Timezone: {tzname}")
-        weather_ctx = fetch_weather_context(lat, lon, tzname, keys)
-        windows = build_time_windows(weather_ctx, set(sensitivities))
-        st.markdown("**Suggested times today** (local):")
-        st.write(format_window_str(windows))
-        if weather_ctx.get("notes"):
-            with st.expander("Weather notes"):
-                for n in weather_ctx["notes"]:
-                    st.write("• " + n)
+                        places["road_distance_m"] = places.apply(lambda r: nearest_road_m(r["lat"], r["lon"]), axis=1)
 
-    with colB:
-        st.subheader("Public resources nearby")
-        with st.spinner("Querying OpenStreetMap for places..."):
-            places = fetch_places(lat, lon, radius_km)
-            roads  = fetch_roads(lat, lon, radius_km)
+                        active = set(sensitivities)
+                        feats = []
+                        for _, row in places.iterrows():
+                            cls = classify_feature(row)
+                            score = score_feature(cls, active, row["distance_km"], row["road_distance_m"])
+                            feats.append({**row.to_dict(), **cls, "score": score})
+                        features = pd.DataFrame(feats)
 
-        if places.empty:
-            st.warning("No public activity places found within that radius. Try enlarging the search.")
-            st.stop()
+                        # Activity include/exclude filters
+                        def matches_includes(activity_set):
+                            if not include_set:
+                                return True
+                            return bool(activity_set & include_set)
+                        def matches_excludes(activity_set):
+                            return bool(activity_set & exclude_set)
 
-        def nearest_road_m(latp, lonp):
-            if roads is None or roads.empty: return None
-            dmins = [haversine_km(latp, lonp, rlat, rlon)*1000 for rlat, rlon in zip(roads["lat"].values, roads["lon"].values)]
-            return min(dmins) if dmins else None
+                        features = features[features["activities"].apply(matches_includes)].copy()
+                        features = features[~features["activities"].apply(matches_excludes)].copy()
 
-        places["road_distance_m"] = places.apply(lambda r: nearest_road_m(r["lat"], r["lon"]), axis=1)
+                        if features.empty:
+                            st.warning("No places match those activity filters. Clear or adjust the selections.")
+                        else:
+                            def make_badges(r):
+                                b=[]
+                                if r["indoor"]: b.append("indoor")
+                                if r["shaded_possible"]: b.append("shaded")
+                                if r["waterfront"]: b.append("waterfront")
+                                if r["paved"]: b.append("paved")
+                                if r["wheelchair"]: b.append("wheelchair")
+                                if r["pollen_risk"]=="low": b.append("low-pollen")
+                                elif r["pollen_risk"]=="higher": b.append("higher-pollen")
+                                if r.get("is_free") is True: b.append("free")
+                                if r.get("is_paid") is True: b.append("paid")
+                                if r.get("road_distance_m") is not None:
+                                    if r["road_distance_m"] > 350: b.append("away from traffic")
+                                    elif r["road_distance_m"] < 120: b.append("near traffic")
+                                return ", ".join(b)
+                            features["badges"] = features.apply(make_badges, axis=1)
+                            features = features.sort_values(["score","distance_km"], ascending=[False, True]).reset_index(drop=True)
+                            features["activities_list"] = features["activities"].apply(lambda s: ", ".join(sorted(s)) if s else "—")
 
-        active = set(sensitivities)
-        feats = []
-        for _, row in places.iterrows():
-            cls = classify_feature(row)
-            score = score_feature(cls, active, row["distance_km"], row["road_distance_m"])
-            feats.append({**row.to_dict(), **cls, "score": score})
-        features = pd.DataFrame(feats)
+                            tbl = features[["name","kind","activities_list","distance_km","road_distance_m","badges","score"]].copy()
+                            tbl["distance_km"] = tbl["distance_km"].map(lambda x: f"{x:.2f} km")
+                            tbl["road_distance_m"] = tbl["road_distance_m"].map(lambda x: (f"{int(x)} m" if pd.notna(x) else "—"))
+                            st.dataframe(tbl, hide_index=True, use_container_width=True)
 
-        # Activity include/exclude filters
-        def matches_includes(activity_set):
-            if not include_set:
-                return True
-            return bool(activity_set & include_set)
-        def matches_excludes(activity_set):
-            return bool(activity_set & exclude_set)
+                            csv = features.drop(columns=["tags"]).to_csv(index=False)
+                            st.download_button("Download results (CSV)", csv, "activities.csv", "text/csv")
 
-        features = features[features["activities"].apply(matches_includes)].copy()
-        features = features[~features["activities"].apply(matches_excludes)].copy()
+                            search_ok = True  # everything needed for the map is now ready
 
-        if features.empty:
-            st.warning("No places match those activity filters. Clear or adjust the selections.")
-            st.stop()
-
-        def make_badges(r):
-            b=[]
-            if r["indoor"]: b.append("indoor")
-            if r["shaded_possible"]: b.append("shaded")
-            if r["waterfront"]: b.append("waterfront")
-            if r["paved"]: b.append("paved")
-            if r["wheelchair"]: b.append("wheelchair")
-            if r["pollen_risk"]=="low": b.append("low-pollen")
-            elif r["pollen_risk"]=="higher": b.append("higher-pollen")
-            if r.get("is_free") is True: b.append("free")
-            if r.get("is_paid") is True: b.append("paid")
-            if r.get("road_distance_m") is not None:
-                if r["road_distance_m"] > 350: b.append("away from traffic")
-                elif r["road_distance_m"] < 120: b.append("near traffic")
-            return ", ".join(b)
-        features["badges"] = features.apply(make_badges, axis=1)
-        features = features.sort_values(["score","distance_km"], ascending=[False, True]).reset_index(drop=True)
-        features["activities_list"] = features["activities"].apply(lambda s: ", ".join(sorted(s)) if s else "—")
-
-        tbl = features[["name","kind","activities_list","distance_km","road_distance_m","badges","score"]].copy()
-        tbl["distance_km"] = tbl["distance_km"].map(lambda x: f"{x:.2f} km")
-        tbl["road_distance_m"] = tbl["road_distance_m"].map(lambda x: (f"{int(x)} m" if pd.notna(x) else "—"))
-        st.dataframe(tbl, hide_index=True, use_container_width=True)
-
-        csv = features.drop(columns=["tags"]).to_csv(index=False)
-        st.download_button("Download results (CSV)", csv, "activities.csv", "text/csv")
-
-    # --- Map (JSON-safe)
+    # --- Map (render only when a search completed successfully)
     st.subheader("Map")
-    _safe_cols = ["lat","lon","name","distance_km","score","activities_list","badges","road_distance_m"]
-    map_df = features[_safe_cols].copy()
-    map_df["lat"]=map_df["lat"].astype(float); map_df["lon"]=map_df["lon"].astype(float)
-    map_df["distance_km"]=map_df["distance_km"].astype(float); map_df["score"]=map_df["score"].astype(float)
-    map_df["activities_list"]=map_df["activities_list"].astype(str); map_df["badges"]=map_df["badges"].astype(str)
-    map_df["road_distance_m"] = map_df["road_distance_m"].apply(lambda x: None if pd.isna(x) else float(x))
-    def _fmt_tooltip(r):
-        rd = "—" if (r.get("road_distance_m") is None) else f"{int(r['road_distance_m'])} m"
-        return f"{r['name']} — score {r['score']:.0f}\nActivities: {r['activities_list']}\nAttributes: {r['badges']}\n{r['distance_km']:.2f} km away | Road: {rd}"
-    map_df["tooltip"] = map_df.apply(_fmt_tooltip, axis=1).astype(str)
+    if search_ok and features is not None and not features.empty:
+        _safe_cols = ["lat","lon","name","distance_km","score","activities_list","badges","road_distance_m"]
+        map_df = features[_safe_cols].copy()
+        map_df["lat"]=map_df["lat"].astype(float); map_df["lon"]=map_df["lon"].astype(float)
+        map_df["distance_km"]=map_df["distance_km"].astype(float); map_df["score"]=map_df["score"].astype(float)
+        map_df["activities_list"]=map_df["activities_list"].astype(str); map_df["badges"]=map_df["badges"].astype(str)
+        map_df["road_distance_m"] = map_df["road_distance_m"].apply(lambda x: None if pd.isna(x) else float(x))
+        def _fmt_tooltip(r):
+            rd = "—" if (r.get("road_distance_m") is None) else f"{int(r['road_distance_m'])} m"
+            return f"{r['name']} — score {r['score']:.0f}\nActivities: {r['activities_list']}\nAttributes: {r['badges']}\n{r['distance_km']:.2f} km away | Road: {rd}"
+        map_df["tooltip"] = map_df.apply(_fmt_tooltip, axis=1).astype(str)
 
-    initial_view = pdk.ViewState(latitude=float(lat), longitude=float(lon), zoom=12, pitch=0)
-    layer_points = pdk.Layer("ScatterplotLayer", data=map_df, get_position='[lon, lat]', get_radius=100, pickable=True, radius_min_pixels=6, radius_max_pixels=40)
-    layer_text = pdk.Layer("TextLayer", data=map_df, get_position='[lon, lat]', get_text="name", get_size=12, get_alignment_baseline='"bottom"')
-    circle_data = pd.DataFrame([{"lat": float(lat), "lon": float(lon), "r": float(radius_km) * 1000.0}])
-    layer_center = pdk.Layer("ScatterplotLayer", data=circle_data, get_position='[lon, lat]', get_radius="r", radius_min_pixels=0, radius_max_pixels=2000, stroked=True, filled=False, line_width_min_pixels=1)
-    deck = pdk.Deck(map_style=None, initial_view_state=initial_view, layers=[layer_center, layer_points, layer_text], tooltip={"text": "{tooltip}"})
-    st.pydeck_chart(deck)
+        initial_view = pdk.ViewState(latitude=float(lat), longitude=float(lon), zoom=12, pitch=0)
+        layer_points = pdk.Layer("ScatterplotLayer", data=map_df, get_position='[lon, lat]', get_radius=100, pickable=True, radius_min_pixels=6, radius_max_pixels=40)
+        layer_text = pdk.Layer("TextLayer", data=map_df, get_position='[lon, lat]', get_text="name", get_size=12, get_alignment_baseline='"bottom"')
+        circle_data = pd.DataFrame([{"lat": float(lat), "lon": float(lon), "r": float(radius_km) * 1000.0}])
+        layer_center = pdk.Layer("ScatterplotLayer", data=circle_data, get_position='[lon, lat]', get_radius="r", radius_min_pixels=0, radius_max_pixels=2000, stroked=True, filled=False, line_width_min_pixels=1)
+        deck = pdk.Deck(map_style=None, initial_view_state=initial_view, layers=[layer_center, layer_points, layer_text], tooltip={"text": "{tooltip}"})
+        st.pydeck_chart(deck)
+    else:
+        st.info("Run a search to view the map.")
 
 # ============================================================
 # COMMUNITY TAB (accounts, profiles, groups, outings)
