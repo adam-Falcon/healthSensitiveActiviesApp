@@ -23,7 +23,7 @@ from timezonefinder import TimezoneFinder
 # -----------------------------
 # Config
 # -----------------------------
-APP_USER_AGENT = "HealthSensitiveActivityFinder/4.0 (contact: contact@example.com)"
+APP_USER_AGENT = "HealthSensitiveActivityFinder/4.1 (contact: contact@example.com)"
 OSM_HEADERS = {"User-Agent": APP_USER_AGENT, "Accept-Language": "en"}
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
@@ -34,7 +34,7 @@ os.makedirs(os.path.dirname(DB_PATH) or ".", exist_ok=True)
 
 st.set_page_config(page_title="Activity Finder — Sensitivity-aware + Community", page_icon="🧭", layout="wide")
 
-# Small CSS and spacing tweaks (no f-string)
+# Small CSS and spacing tweaks
 st.markdown("""
 <style>
 div[data-testid="column"] > div:has(input),
@@ -47,13 +47,13 @@ div[data-testid="column"] > div:has(div[role="slider"]) { margin-top: 0 !importa
 """, unsafe_allow_html=True)
 
 # -----------------------------
-# Query-param aware routing
+# Routing via query params
 # -----------------------------
-qp = st.query_params  # Streamlit ≥1.30
+qp = st.query_params
 
 def _seed_route_from_url():
     if "route" not in st.session_state:
-        st.session_state["route"] = qp.get("route", "home")
+        st.session_state["route"] = qp.get("route", "explore")  # default to Explore
     if "view_group_id" not in st.session_state:
         gid = qp.get("gid")
         st.session_state["view_group_id"] = int(gid) if gid else None
@@ -62,18 +62,21 @@ def _seed_route_from_url():
 
 _seed_route_from_url()
 
-def goto_group(gid: int):
-    st.session_state["route"] = "group"
-    st.session_state["view_group_id"] = int(gid)
-    st.query_params["route"] = "group"
-    st.query_params["gid"] = str(gid)
+def set_route(route: str, **params):
+    st.session_state["route"] = route
+    # reset group id unless route=group
+    if route != "group":
+        st.session_state["view_group_id"] = None
+        qp.pop("gid", None)
+    qp["route"] = route
+    for k, v in params.items():
+        qp[k] = str(v)
+        if k == "gid":
+            st.session_state["view_group_id"] = int(v)
     st.rerun()
 
-def goto_home():
-    st.session_state["route"] = "home"
-    st.session_state["view_group_id"] = None
-    st.query_params.clear()
-    st.rerun()
+def goto_group(gid: int):
+    set_route("group", gid=gid)
 
 # -----------------------------
 # HTTP session (polite retries)
@@ -177,7 +180,6 @@ def init_db():
         FOREIGN KEY(user_id) REFERENCES users(id)
     );
 
-    -- NEW: posts + replies for group chat
     CREATE TABLE IF NOT EXISTS posts (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         group_id INTEGER NOT NULL,
@@ -260,7 +262,6 @@ def create_group(name, description, city, tags, owner_id, visibility="public"):
 def delete_group_all(gid):
     conn = db()
     cur = conn.cursor()
-    # Delete children first
     cur.execute("DELETE FROM post_replies WHERE post_id IN (SELECT id FROM posts WHERE group_id=?)", (gid,))
     cur.execute("DELETE FROM posts WHERE group_id=?", (gid,))
     cur.execute("DELETE FROM rsvps WHERE outing_id IN (SELECT id FROM outings WHERE group_id=?)", (gid,))
@@ -270,16 +271,18 @@ def delete_group_all(gid):
     conn.commit()
     conn.close()
 
-def list_groups(search=""):
+def list_groups(search_city: str = ""):
+    """Return groups, optionally filtered by city (location)."""
     conn = db()
     cur = conn.cursor()
-    if search.strip():
+    if search_city.strip():
+        # Search by city ONLY (location-first behavior)
         cur.execute("""
           SELECT g.*, u.username AS owner_name
           FROM groups g JOIN users u ON u.id=g.owner_id
-          WHERE g.name LIKE ?
+          WHERE COALESCE(g.city,'') LIKE ?
           ORDER BY g.created_at DESC
-        """, (f"%{search}%",))
+        """, (f"%{search_city}%",))
     else:
         cur.execute("""
           SELECT g.*, u.username AS owner_name
@@ -800,8 +803,9 @@ def nearest_road_m(latp, lonp, roads_df):
     dmins = [haversine_km(latp, lonp, rlat, rlon)*1000 for rlat, rlon in zip(roads_df["lat"].values, roads_df["lon"].values)]
     return min(dmins) if dmins else None
 
+# ------------ Explore ------------
 def render_explore(me):
-    st.markdown("### 🔍 Search near you")
+    st.markdown("### 🔍 Explore")
     col1, col2, col3 = st.columns([3, 1.6, 2.8])
     with col1:
         address = st.text_input("City / address / ZIP", value="Portland, ME", label_visibility="collapsed", placeholder="e.g., 02139 or 'Portland, ME'")
@@ -823,7 +827,6 @@ def render_explore(me):
         cols_inc = st.columns(3)
         cols_exc = st.columns(3)
         include_flags, exclude_flags = {}, {}
-        # defaults from profile
         prof_includes = set()
         if me:
             try:
@@ -888,7 +891,6 @@ def render_explore(me):
         for _, row in places.iterrows():
             cls = classify_feature(row)
             score = score_feature(cls, active, row["distance_km"], row["road_distance_m"])
-            # ensure JSON-safe activities: convert to list
             acts_list = sorted(list(cls["activities"])) if cls.get("activities") else []
             feats.append({**row.to_dict(), **{k:v for k,v in cls.items() if k!="activities"}, "activities": acts_list, "score": score})
         features = pd.DataFrame(feats)
@@ -935,7 +937,6 @@ def render_explore(me):
         csv = features.drop(columns=["tags"]).to_csv(index=False)
         st.download_button("Download results (CSV)", csv, "activities.csv", "text/csv")
 
-    # Map (JSON-safe types)
     st.subheader("Map")
     _safe_cols = ["lat","lon","name","distance_km","score","activities_list","badges","road_distance_m"]
     map_df = features[_safe_cols].copy()
@@ -956,6 +957,7 @@ def render_explore(me):
     deck = pdk.Deck(map_style=None, initial_view_state=initial_view, layers=[layer_center, layer_points, layer_text], tooltip={"text": "{tooltip}"})
     st.pydeck_chart(deck)
 
+# ------------ Auth ------------
 def render_auth_gate():
     colL, colR = st.columns(2)
     with colL:
@@ -1000,8 +1002,9 @@ def render_auth_gate():
             except Exception as e:
                 st.error(f"Sign up failed: {e}")
 
-def render_profile_and_groups(me):
-    st.subheader("Your profile")
+# ------------ Profile ------------
+def render_profile(me):
+    st.markdown("### 👤 My Profile")
     my_sens = []
     my_acts = []
     try:
@@ -1023,21 +1026,25 @@ def render_profile_and_groups(me):
         st.success("Profile updated. Explore defaults will follow your profile.")
         st.rerun()
 
-    st.subheader("Groups")
+# ------------ Community (groups list/create) ------------
+def render_community(me):
+    st.markdown("### 👥 Community")
     gL, gR = st.columns([2, 2])
 
     with gL:
-        q = st.text_input("Search groups", value="")
-        rows = list_groups(q)
-        st.caption("Browse groups and join ones that match your interests.")
-        for g in rows[:50]:
+        city_q = st.text_input("Search groups by city", value="", placeholder="e.g., Portland, ME")
+        rows = list_groups(city_q)
+        st.caption("Results are filtered by group city (location).")
+        for g in rows[:100]:
             with st.container(border=True):
-                st.markdown(f"**{g['name']}**  \n{g.get('description') or ''}")
+                # Emphasize location first
+                city_disp = g.get('city') or '—'
+                st.markdown(f"**{city_disp}** — {g['name']}  \n{g.get('description') or ''}")
                 try:
                     tags_list = json.loads(g['tags'] or '[]')
                 except Exception:
                     tags_list = []
-                st.caption(f"City: {g.get('city') or '—'} • Owner: {g['owner_name']} • Tags: {', '.join(tags_list) or '—'}")
+                st.caption(f"Owner: {g['owner_name']} • Tags: {', '.join(tags_list) or '—'} • Created: {g['created_at'][:10]}")
                 jcols = st.columns(4)
                 with jcols[0]:
                     if st.button("View", key=f"view_g_{g['id']}"):
@@ -1066,7 +1073,7 @@ def render_profile_and_groups(me):
         with st.form("new_group"):
             gn = st.text_input("Group name")
             gd = st.text_area("Description")
-            gc = st.text_input("City (optional)")
+            gc = st.text_input("City (location)")
             gt = st.text_input("Tags (comma-separated, e.g. walking, low impact)")
             make = st.form_submit_button("Create group")
         if make:
@@ -1082,16 +1089,17 @@ def render_profile_and_groups(me):
         st.caption("Your groups")
         mg = my_groups(me["id"])
         for g in mg:
-            if st.button(f"Open: {g['name']}", key=f"my_open_{g['id']}"):
+            if st.button(f"Open: {g['name']} ({g.get('city') or '—'})", key=f"my_open_{g['id']}"):
                 goto_group(g["id"])
 
+# ------------ Group page ------------
 def render_group_page(gid: int):
     me = get_user(st.session_state.user_id) if st.session_state.user_id else None
     g = get_group(gid)
     if not g:
         st.warning("Group not found.")
-        if st.button("← Back"):
-            goto_home()
+        if st.button("← Back to Community"):
+            set_route("community")
         return
 
     owner_id = g["owner_id"]
@@ -1100,15 +1108,16 @@ def render_group_page(gid: int):
 
     top = st.columns([1, 6, 1])
     with top[0]:
-        if st.button("← Back", help="Back to Community"):
-            goto_home()
+        if st.button("← Community"):
+            set_route("community")
     with top[1]:
-        st.markdown(f"### {g['name']}")
+        city_disp = g.get('city') or '—'
+        st.markdown(f"### {g['name']} — {city_disp}")
         try:
             tags_list = json.loads(g['tags'] or '[]')
         except Exception:
             tags_list = []
-        st.caption(f"Owner: {g['owner_name']} • City: {g.get('city') or '—'} • Tags: {', '.join(tags_list) or '—'}")
+        st.caption(f"Owner: {g['owner_name']} • Tags: {', '.join(tags_list) or '—'}")
 
     with top[2]:
         if is_mem:
@@ -1131,7 +1140,7 @@ def render_group_page(gid: int):
                 if del_name.strip() == g["name"]:
                     delete_group_all(gid)
                     st.success("Group deleted.")
-                    goto_home()
+                    set_route("community")
                 else:
                     st.error("Group name did not match.")
 
@@ -1145,7 +1154,6 @@ def render_group_page(gid: int):
         else:
             for o in outings:
                 with st.container(border=True):
-                    # Render time safely
                     try:
                         if o.get("lat") and o.get("lon"):
                             local_tz = pytz.timezone(guess_timezone(o["lat"], o["lon"]))
@@ -1192,7 +1200,6 @@ def render_group_page(gid: int):
                 if not t_title.strip():
                     st.error("Title required.")
                 else:
-                    # Geocode (best effort)
                     lat_o = lon_o = None
                     loc_o = t_place.strip()
                     if loc_o:
@@ -1205,7 +1212,7 @@ def render_group_page(gid: int):
                     dt_local = datetime.combine(t_date, t_time)
                     dt_local = tz_local.localize(dt_local)
                     time_utc = dt_local.astimezone(pytz.utc).isoformat()
-                    oid = create_outing(gid, t_title.strip(), time_utc, loc_o, lat_o, lon_o, (int(t_max) or None), t_notes.strip(), me["id"])
+                    _ = create_outing(gid, t_title.strip(), time_utc, loc_o, lat_o, lon_o, (int(t_max) or None), t_notes.strip(), me["id"])
                     st.success("Outing created.")
                     st.rerun()
 
@@ -1230,7 +1237,6 @@ def render_group_page(gid: int):
         st.pydeck_chart(deck)
 
     st.divider()
-    # Group posts (chat-like)
     st.markdown("#### Group posts")
     if not is_mem:
         st.info("Join the group to view and post messages.")
@@ -1256,7 +1262,6 @@ def render_group_page(gid: int):
                 ts = p["created_at"]
                 st.markdown(f"**{p['author']}** · {ts}")
                 st.write(p["content"])
-                # Replies
                 replies = list_replies(p["id"])
                 for r in replies:
                     st.markdown(f"> **{r['author']}** · {r['created_at']}  \n> {r['content']}")
@@ -1280,51 +1285,42 @@ except Exception as e:
     st.error(f"Database init failed: {e}")
     st.stop()
 
-# Top nav
+# Top nav (now wired to real routes)
 nav1, nav2, nav3, navsp = st.columns([1,1,1,6])
 with nav1:
     if st.button("🗺️ Explore", use_container_width=True):
-        goto_home()
+        set_route("explore")
 with nav2:
     if st.button("👥 Community", use_container_width=True):
-        goto_home()
+        set_route("community")
 with nav3:
     if st.button("👤 My Profile", use_container_width=True):
-        goto_home()
+        set_route("profile")
 
 st.markdown("---")
 
-# Gate for auth on community routes
-if st.session_state.user_id is None and st.session_state["route"] in ("home","group"):
-    # Show login/signup + a light explore preview below (optional)
-    st.markdown("### 👥 Community")
+# Auth gate for pages that need it
+needs_auth = st.session_state["route"] in ("community", "group", "profile")
+if st.session_state.user_id is None and needs_auth:
     render_auth_gate()
-    st.markdown("---")
-    # Allow Explore even if not logged in
-    render_explore(None)
     st.stop()
 
-# Logged in
+# Logged-in user (if any)
 me = get_user(st.session_state.user_id) if st.session_state.user_id else None
-if not me:
-    # Fallback if user disappeared
+if needs_auth and not me:
     st.session_state.user_id = None
     st.rerun()
 
 # Router
-route = st.session_state.get("route", "home")
+route = st.session_state.get("route", "explore")
 if route == "group" and st.session_state.get("view_group_id"):
     render_group_page(st.session_state["view_group_id"])
+elif route == "community":
+    render_community(me)
+elif route == "profile":
+    render_profile(me)
 else:
-    # Community (profile + groups) + Explore below
-    st.markdown("### 👥 Community")
-    st.success(f"Logged in as **{me['username']}**")
-    if st.button("Log out"):
-        st.session_state.user_id = None
-        goto_home()
-
-    render_profile_and_groups(me)
-    st.markdown("---")
+    # explore (anonymous allowed)
     render_explore(me)
 
 # Footer
