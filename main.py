@@ -4,13 +4,13 @@
 # Adds accounts, profiles, groups, and outings using a local SQLite DB.
 
 import os
-import json
-import time
 import math
-import sqlite3
+import time
+import json
 import hashlib
 import secrets
-from datetime import datetime, timedelta, timezone
+import sqlite3
+from datetime import datetime, timedelta, timezone, date as _date, time as _time
 
 import pandas as pd
 import pydeck as pdk
@@ -37,14 +37,10 @@ st.set_page_config(
     page_icon="🧭",
     layout="wide",
 )
-
-# Show detailed errors instead of going blank
-st.set_option("client.showErrorDetails", True)
-
-# compact top row spacing
 st.markdown(
     """
     <style>
+    /* Compact top row spacing */
     div[data-testid="column"] > div:has(input),
     div[data-testid="column"] > div:has(button),
     div[data-testid="column"] > div:has(div[role="slider"]) { margin-top: 0 !important; }
@@ -54,14 +50,7 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
-
-# Safe rerun helper (handles old/new Streamlit versions)
-def _safe_rerun():
-    try:
-        st.rerun()
-    except Exception:
-        # Fallback for older Streamlit
-        st.experimental_rerun()
+st.set_option("client.showErrorDetails", True)
 
 # -----------------------------
 # HTTP session (polite retries)
@@ -84,6 +73,61 @@ def http():
     return _session
 
 # -----------------------------
+# Utility helpers
+# -----------------------------
+def _safe_rerun():
+    try:
+        st.rerun()
+    except Exception:
+        pass
+
+def now_iso():
+    return datetime.utcnow().replace(tzinfo=timezone.utc).isoformat()
+
+def local_time_str(time_utc_iso: str | None, lat: float | None, lon: float | None) -> str:
+    """Format an ISO UTC time into the local tz from lat/lon; fallback to ET."""
+    if not time_utc_iso:
+        return "TBD"
+    try:
+        dt_utc = datetime.fromisoformat(time_utc_iso.replace("Z", "+00:00"))
+    except Exception:
+        return "TBD"
+    tzname = None
+    if lat is not None and lon is not None:
+        try:
+            tzname = TimezoneFinder().timezone_at(lat=float(lat), lng=float(lon))
+        except Exception:
+            tzname = None
+    tz = pytz.timezone(tzname or "America/New_York")
+    dt_local = dt_utc.astimezone(tz)
+    try:
+        return dt_local.strftime("%b %d, %Y %I:%M %p %Z")
+    except Exception:
+        return dt_local.isoformat()
+
+def pretty_time(dt):
+    try:
+        return dt.strftime("%-I:%M %p")
+    except ValueError:
+        return dt.strftime("%I:%M %p").lstrip("0")
+
+def haversine_km(lat1, lon1, lat2, lon2):
+    R = 6371.0
+    from math import radians, sin, cos, asin, sqrt
+    phi1, phi2 = radians(lat1), radians(lat2)
+    dphi = radians(lat2 - lat1)
+    dlambda = radians(lon2 - lon1)
+    a = sin(dphi/2)**2 + cos(phi1)*cos(phi2)*sin(dlambda/2)**2
+    return 2 * R * asin(sqrt(a))
+
+def guess_timezone(lat, lon):
+    try:
+        tzname = TimezoneFinder().timezone_at(lat=lat, lng=lon)
+    except Exception:
+        tzname = None
+    return tzname or "America/New_York"
+
+# -----------------------------
 # DB helpers
 # -----------------------------
 def db():
@@ -104,8 +148,8 @@ def init_db():
             pw_hash TEXT NOT NULL,
             salt TEXT NOT NULL,
             bio TEXT,
-            sensitivities TEXT,
-            activities TEXT,
+            sensitivities TEXT,   -- JSON array
+            activities TEXT,      -- JSON array
             created_at TEXT NOT NULL
         );
 
@@ -114,7 +158,7 @@ def init_db():
             name TEXT NOT NULL,
             description TEXT,
             city TEXT,
-            tags TEXT,
+            tags TEXT,            -- JSON array
             owner_id INTEGER NOT NULL,
             visibility TEXT DEFAULT 'public',
             created_at TEXT NOT NULL,
@@ -124,7 +168,7 @@ def init_db():
         CREATE TABLE IF NOT EXISTS group_members (
             group_id INTEGER NOT NULL,
             user_id INTEGER NOT NULL,
-            role TEXT DEFAULT 'member',
+            role TEXT DEFAULT 'member',  -- owner|admin|member
             joined_at TEXT NOT NULL,
             PRIMARY KEY (group_id, user_id),
             FOREIGN KEY(group_id) REFERENCES groups(id),
@@ -149,7 +193,7 @@ def init_db():
         CREATE TABLE IF NOT EXISTS rsvps (
             outing_id INTEGER NOT NULL,
             user_id INTEGER NOT NULL,
-            status TEXT NOT NULL,
+            status TEXT NOT NULL,  -- going|maybe|not_going
             responded_at TEXT NOT NULL,
             PRIMARY KEY (outing_id, user_id),
             FOREIGN KEY(outing_id) REFERENCES outings(id),
@@ -160,13 +204,12 @@ def init_db():
     conn.commit()
     conn.close()
 
-def now_iso():
-    return datetime.utcnow().replace(tzinfo=timezone.utc).isoformat()
-
 def hash_password(password: str, salt: str | None = None):
     if not salt:
         salt = secrets.token_hex(16)
-    h = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), bytes.fromhex(salt), 100_000).hex()
+    h = hashlib.pbkdf2_hmac(
+        "sha256", password.encode("utf-8"), bytes.fromhex(salt), 100_000
+    ).hex()
     return h, salt
 
 def create_user(username, email, password):
@@ -188,7 +231,8 @@ def authenticate(username, password):
     cur.execute("SELECT * FROM users WHERE username=?", (username,))
     row = cur.fetchone()
     conn.close()
-    if not row: return None
+    if not row:
+        return None
     calc, _ = hash_password(password, row["salt"])
     return row["id"] if calc == row["pw_hash"] else None
 
@@ -203,8 +247,10 @@ def get_user(uid):
 def update_profile(uid, bio, sensitivities, activities):
     conn = db()
     cur = conn.cursor()
-    cur.execute("UPDATE users SET bio=?, sensitivities=?, activities=? WHERE id=?",
-                (bio, json.dumps(sensitivities), json.dumps(activities), uid))
+    cur.execute(
+        "UPDATE users SET bio=?, sensitivities=?, activities=? WHERE id=?",
+        (bio, json.dumps(sensitivities), json.dumps(activities), uid),
+    )
     conn.commit()
     conn.close()
 
@@ -229,12 +275,16 @@ def list_groups(search=""):
     cur = conn.cursor()
     if search.strip():
         cur.execute(
-            "SELECT g.*, u.username AS owner_name FROM groups g JOIN users u ON u.id=g.owner_id WHERE g.name LIKE ? ORDER BY g.created_at DESC",
+            "SELECT g.*, u.username AS owner_name FROM groups g "
+            "JOIN users u ON u.id=g.owner_id "
+            "WHERE g.name LIKE ? ORDER BY g.created_at DESC",
             (f"%{search}%",),
         )
     else:
         cur.execute(
-            "SELECT g.*, u.username AS owner_name FROM groups g JOIN users u ON u.id=g.owner_id ORDER BY g.created_at DESC"
+            "SELECT g.*, u.username AS owner_name FROM groups g "
+            "JOIN users u ON u.id=g.owner_id "
+            "ORDER BY g.created_at DESC"
         )
     rows = [dict(r) for r in cur.fetchall()]
     conn.close()
@@ -243,7 +293,11 @@ def list_groups(search=""):
 def get_group(gid):
     conn = db()
     cur = conn.cursor()
-    cur.execute("SELECT g.*, u.username AS owner_name FROM groups g JOIN users u ON u.id=g.owner_id WHERE g.id=?", (gid,))
+    cur.execute(
+        "SELECT g.*, u.username AS owner_name FROM groups g "
+        "JOIN users u ON u.id=g.owner_id WHERE g.id=?",
+        (gid,),
+    )
     row = cur.fetchone()
     conn.close()
     return dict(row) if row else None
@@ -251,14 +305,17 @@ def get_group(gid):
 def my_groups(uid):
     conn = db()
     cur = conn.cursor()
-    cur.execute("""
+    cur.execute(
+        """
       SELECT g.*, u.username AS owner_name, m.role
       FROM group_members m
       JOIN groups g ON g.id=m.group_id
       JOIN users u ON u.id=g.owner_id
       WHERE m.user_id=?
       ORDER BY g.created_at DESC
-    """, (uid,))
+    """,
+        (uid,),
+    )
     rows = [dict(r) for r in cur.fetchall()]
     conn.close()
     return rows
@@ -266,32 +323,73 @@ def my_groups(uid):
 def join_group(gid, uid, role="member"):
     conn = db()
     cur = conn.cursor()
-    cur.execute("INSERT OR IGNORE INTO group_members (group_id, user_id, role, joined_at) VALUES (?, ?, ?, ?)",
-                (gid, uid, role, now_iso()))
+    cur.execute(
+        "INSERT OR IGNORE INTO group_members (group_id, user_id, role, joined_at) VALUES (?, ?, ?, ?)",
+        (gid, uid, role, now_iso()),
+    )
     conn.commit()
     conn.close()
 
 def leave_group(gid, uid):
     conn = db()
     cur = conn.cursor()
-    cur.execute("DELETE FROM group_members WHERE group_id=? AND user_id=?", (gid, uid))
+    cur.execute(
+        "DELETE FROM group_members WHERE group_id=? AND user_id=?", (gid, uid)
+    )
     conn.commit()
     conn.close()
 
 def is_member(gid, uid):
     conn = db()
     cur = conn.cursor()
-    cur.execute("SELECT 1 FROM group_members WHERE group_id=? AND user_id=?", (gid, uid))
+    cur.execute(
+        "SELECT 1 FROM group_members WHERE group_id=? AND user_id=?", (gid, uid)
+    )
     ok = cur.fetchone() is not None
     conn.close()
     return ok
+
+def group_member_count(gid: int) -> int:
+    conn = db()
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM group_members WHERE group_id=?", (gid,))
+    (c,) = cur.fetchone()
+    conn.close()
+    return int(c or 0)
+
+def delete_group(gid: int):
+    conn = db()
+    cur = conn.cursor()
+    # RSVPs for group's outings
+    cur.execute("SELECT id FROM outings WHERE group_id=?", (gid,))
+    outing_ids = [r[0] for r in cur.fetchall()]
+    if outing_ids:
+        cur.executemany(
+            "DELETE FROM rsvps WHERE outing_id=?", [(oid,) for oid in outing_ids]
+        )
+    cur.execute("DELETE FROM outings WHERE group_id=?", (gid,))
+    cur.execute("DELETE FROM group_members WHERE group_id=?", (gid,))
+    cur.execute("DELETE FROM groups WHERE id=?", (gid,))
+    conn.commit()
+    conn.close()
 
 def create_outing(group_id, title, time_utc, location_name, lat, lon, max_people, notes, uid):
     conn = db()
     cur = conn.cursor()
     cur.execute(
         "INSERT INTO outings (group_id, title, time_utc, location_name, lat, lon, max_people, notes, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (group_id, title, time_utc, location_name, lat, lon, max_people, notes, uid, now_iso()),
+        (
+            group_id,
+            title,
+            time_utc,
+            location_name,
+            lat,
+            lon,
+            max_people,
+            notes,
+            uid,
+            now_iso(),
+        ),
     )
     oid = cur.lastrowid
     conn.commit()
@@ -301,12 +399,15 @@ def create_outing(group_id, title, time_utc, location_name, lat, lon, max_people
 def list_outings(group_id):
     conn = db()
     cur = conn.cursor()
-    cur.execute("""
+    cur.execute(
+        """
       SELECT o.*, u.username AS creator
       FROM outings o JOIN users u ON u.id=o.created_by
       WHERE o.group_id=?
       ORDER BY o.time_utc ASC
-    """, (group_id,))
+    """,
+        (group_id,),
+    )
     rows = [dict(r) for r in cur.fetchall()]
     conn.close()
     return rows
@@ -314,15 +415,20 @@ def list_outings(group_id):
 def rsvp(outing_id, uid, status):
     conn = db()
     cur = conn.cursor()
-    cur.execute("INSERT OR REPLACE INTO rsvps (outing_id, user_id, status, responded_at) VALUES (?, ?, ?, ?)",
-                (outing_id, uid, status, now_iso()))
+    cur.execute(
+        "INSERT OR REPLACE INTO rsvps (outing_id, user_id, status, responded_at) VALUES (?, ?, ?, ?)",
+        (outing_id, uid, status, now_iso()),
+    )
     conn.commit()
     conn.close()
 
 def rsvp_counts(outing_id):
     conn = db()
     cur = conn.cursor()
-    cur.execute("SELECT status, COUNT(*) as c FROM rsvps WHERE outing_id=? GROUP BY status", (outing_id,))
+    cur.execute(
+        "SELECT status, COUNT(*) as c FROM rsvps WHERE outing_id=? GROUP BY status",
+        (outing_id,),
+    )
     rows = {r["status"]: r["c"] for r in cur.fetchall()}
     conn.close()
     return rows
@@ -330,15 +436,6 @@ def rsvp_counts(outing_id):
 # -----------------------------
 # Core helpers (geocode, OSM, weather)
 # -----------------------------
-def haversine_km(lat1, lon1, lat2, lon2):
-    R = 6371.0
-    from math import radians, sin, cos, asin, sqrt
-    phi1, phi2 = radians(lat1), radians(lat2)
-    dphi = radians(lat2 - lat1)
-    dlambda = radians(lon2 - lon1)
-    a = sin(dphi/2)**2 + cos(phi1)*cos(phi2)*sin(dlambda/2)**2
-    return 2 * R * asin(sqrt(a))
-
 @st.cache_data(show_spinner=False, ttl=3600)
 def geocode_address(q):
     r = http().get(NOMINATIM_URL, params={"q": q, "format":"json", "limit":1}, timeout=30)
@@ -443,12 +540,6 @@ def fetch_roads(lat, lon, radius_km):
         rows.append({"lat": cen["lat"], "lon": cen["lon"], "tags": el.get("tags", {})})
     return pd.DataFrame(rows)
 
-def guess_timezone(lat, lon):
-    if lat is None or lon is None:
-        return "America/New_York"
-    tzname = TimezoneFinder().timezone_at(lat=float(lat), lng=float(lon))
-    return tzname or "America/New_York"
-
 def load_optional_keys():
     keys = {"owm": os.getenv("OWM_API_KEY")}
     try: keys["owm"] = st.secrets.get("OWM_API_KEY", keys["owm"])
@@ -488,23 +579,6 @@ def contiguous_windows(times, good_mask):
         if (not good or i==len(good_mask)-1) and start is not None:
             end = i if good else i-1; out.append((start,end)); start=None
     return out
-
-def pretty_time(dt):
-    try: return dt.strftime("%-I:%M %p")
-    except ValueError: return dt.strftime("%I:%M %p").lstrip("0")
-
-def local_time_str(iso_utc: str, lat=None, lon=None, fallback_tz="America/New_York"):
-    """Safely convert an ISO UTC string to readable local time (always returns string)."""
-    try:
-        if not iso_utc:
-            return "TBD"
-        dt = datetime.fromisoformat(iso_utc)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=pytz.utc)
-        tz = pytz.timezone(guess_timezone(lat, lon) or fallback_tz)
-        return dt.astimezone(tz).strftime("%b %d, %Y %I:%M %p %Z")
-    except Exception:
-        return str(iso_utc)
 
 # -----------------------------
 # Classification & scoring
@@ -678,7 +752,7 @@ def format_window_str(windows):
     return "; ".join(f"{pretty_time(s)}–{pretty_time(e)} ({why})" for s,e,why in windows[:3])
 
 # -----------------------------
-# UI — Tabs
+# Start app (init DB, session)
 # -----------------------------
 try:
     init_db()
@@ -688,13 +762,16 @@ except Exception as e:
 
 if "user_id" not in st.session_state:
     st.session_state.user_id = None
-if "view_group_id" not in st.session_state:
-    st.session_state.view_group_id = None
+
+if "default_sensitivities" not in st.session_state:
+    st.session_state["default_sensitivities"] = ["UV sensitivity", "Pollen sensitivity"]
+if "default_include_activities" not in st.session_state:
+    st.session_state["default_include_activities"] = []
 
 tab_explore, tab_community = st.tabs(["🗺️ Explore", "👥 Community"])
 
 # ============================================================
-# EXPLORE TAB  (no st.stop() here!)
+# EXPLORE TAB  (never st.stop(); gate work with flags)
 # ============================================================
 with tab_explore:
     st.markdown("### 🔍 Search near you")
@@ -704,19 +781,27 @@ with tab_explore:
             "City / address / ZIP",
             value="Portland, ME",
             label_visibility="collapsed",
-            placeholder="e.g., 02139 or 'Portland, ME'"
+            placeholder="e.g., 02139 or 'Portland, ME'",
         )
     with col2:
         radius_km = st.slider("Radius (km)", 2, 30, 10, 1, label_visibility="collapsed")
     with col3:
+        default_sens = st.session_state.get(
+            "default_sensitivities", ["UV sensitivity", "Pollen sensitivity"]
+        )
         sensitivities = st.multiselect(
             "Sensitivities (choose any)",
             [
-                "UV sensitivity", "Pollen sensitivity", "Breathing sensitivity",
-                "Smog sensitivity", "Low impact", "Noise sensitivity",
-                "Privacy", "Accessibility"
+                "UV sensitivity",
+                "Pollen sensitivity",
+                "Breathing sensitivity",
+                "Smog sensitivity",
+                "Low impact",
+                "Noise sensitivity",
+                "Privacy",
+                "Accessibility",
             ],
-            default=["UV sensitivity","Pollen sensitivity"]
+            default=default_sens,
         )
 
     ALL_ACTIVITIES = [
@@ -728,22 +813,32 @@ with tab_explore:
         "Free", "Paid"
     ]
 
-    with st.expander("Include / Exclude activities by type"):
+    with st.expander("Include / Exclude activities by type", expanded=False):
         st.caption("Select the activities you want to include and/or exclude. If both are selected for the same activity, exclusion wins.")
         cols_inc = st.columns(3)
         cols_exc = st.columns(3)
         include_flags, exclude_flags = {}, {}
+
+        profile_includes = set(st.session_state.get("default_include_activities", []))
         for i, act in enumerate(ALL_ACTIVITIES):
             with cols_inc[i % 3]:
-                include_flags[act] = st.checkbox(f"Include: {act}", value=False, key=f"inc_{act}")
+                include_flags[act] = st.checkbox(
+                    f"Include: {act}",
+                    value=(act in profile_includes),
+                    key=f"inc_{act}",
+                )
             with cols_exc[i % 3]:
-                exclude_flags[act] = st.checkbox(f"Exclude: {act}", value=False, key=f"exc_{act}")
-        include_set = {k for k,v in include_flags.items() if v}
-        exclude_set = {k for k,v in exclude_flags.items() if v}
+                exclude_flags[act] = st.checkbox(
+                    f"Exclude: {act}",
+                    value=False,
+                    key=f"exc_{act}",
+                )
+        include_set = {k for k, v in include_flags.items() if v}
+        exclude_set = {k for k, v in exclude_flags.items() if v}
 
     go = st.button("Search", type="primary")
 
-    # --- Only run the search if requested; never stop the whole script
+    # state used later for map
     search_ok = False
     features = None
     lat = lon = None
@@ -781,23 +876,31 @@ with tab_explore:
                     st.subheader("Public resources nearby")
                     with st.spinner("Querying OpenStreetMap for places..."):
                         places = fetch_places(lat, lon, radius_km)
-                        roads  = fetch_roads(lat, lon, radius_km)
+                        roads = fetch_roads(lat, lon, radius_km)
 
                     if places.empty:
                         st.warning("No public activity places found within that radius. Try enlarging the search.")
                     else:
                         def nearest_road_m(latp, lonp):
-                            if roads is None or roads.empty: return None
-                            dmins = [haversine_km(latp, lonp, rlat, rlon)*1000 for rlat, rlon in zip(roads["lat"].values, roads["lon"].values)]
+                            if roads is None or roads.empty:
+                                return None
+                            dmins = [
+                                haversine_km(latp, lonp, rlat, rlon) * 1000
+                                for rlat, rlon in zip(roads["lat"].values, roads["lon"].values)
+                            ]
                             return min(dmins) if dmins else None
 
-                        places["road_distance_m"] = places.apply(lambda r: nearest_road_m(r["lat"], r["lon"]), axis=1)
+                        places["road_distance_m"] = places.apply(
+                            lambda r: nearest_road_m(r["lat"], r["lon"]), axis=1
+                        )
 
                         active = set(sensitivities)
                         feats = []
                         for _, row in places.iterrows():
                             cls = classify_feature(row)
-                            score = score_feature(cls, active, row["distance_km"], row["road_distance_m"])
+                            score = score_feature(
+                                cls, active, row["distance_km"], row["road_distance_m"]
+                            )
                             feats.append({**row.to_dict(), **cls, "score": score})
                         features = pd.DataFrame(feats)
 
@@ -806,6 +909,7 @@ with tab_explore:
                             if not include_set:
                                 return True
                             return bool(activity_set & include_set)
+
                         def matches_excludes(activity_set):
                             return bool(activity_set & exclude_set)
 
@@ -816,54 +920,141 @@ with tab_explore:
                             st.warning("No places match those activity filters. Clear or adjust the selections.")
                         else:
                             def make_badges(r):
-                                b=[]
-                                if r["indoor"]: b.append("indoor")
-                                if r["shaded_possible"]: b.append("shaded")
-                                if r["waterfront"]: b.append("waterfront")
-                                if r["paved"]: b.append("paved")
-                                if r["wheelchair"]: b.append("wheelchair")
-                                if r["pollen_risk"]=="low": b.append("low-pollen")
-                                elif r["pollen_risk"]=="higher": b.append("higher-pollen")
-                                if r.get("is_free") is True: b.append("free")
-                                if r.get("is_paid") is True: b.append("paid")
+                                b = []
+                                if r["indoor"]:
+                                    b.append("indoor")
+                                if r["shaded_possible"]:
+                                    b.append("shaded")
+                                if r["waterfront"]:
+                                    b.append("waterfront")
+                                if r["paved"]:
+                                    b.append("paved")
+                                if r["wheelchair"]:
+                                    b.append("wheelchair")
+                                if r["pollen_risk"] == "low":
+                                    b.append("low-pollen")
+                                elif r["pollen_risk"] == "higher":
+                                    b.append("higher-pollen")
+                                if r.get("is_free") is True:
+                                    b.append("free")
+                                if r.get("is_paid") is True:
+                                    b.append("paid")
                                 if r.get("road_distance_m") is not None:
-                                    if r["road_distance_m"] > 350: b.append("away from traffic")
-                                    elif r["road_distance_m"] < 120: b.append("near traffic")
+                                    if r["road_distance_m"] > 350:
+                                        b.append("away from traffic")
+                                    elif r["road_distance_m"] < 120:
+                                        b.append("near traffic")
                                 return ", ".join(b)
-                            features["badges"] = features.apply(make_badges, axis=1)
-                            features = features.sort_values(["score","distance_km"], ascending=[False, True]).reset_index(drop=True)
-                            features["activities_list"] = features["activities"].apply(lambda s: ", ".join(sorted(s)) if s else "—")
 
-                            tbl = features[["name","kind","activities_list","distance_km","road_distance_m","badges","score"]].copy()
-                            tbl["distance_km"] = tbl["distance_km"].map(lambda x: f"{x:.2f} km")
-                            tbl["road_distance_m"] = tbl["road_distance_m"].map(lambda x: (f"{int(x)} m" if pd.notna(x) else "—"))
+                            features["badges"] = features.apply(make_badges, axis=1)
+                            features = features.sort_values(
+                                ["score", "distance_km"], ascending=[False, True]
+                            ).reset_index(drop=True)
+                            features["activities_list"] = features["activities"].apply(
+                                lambda s: ", ".join(sorted(s)) if s else "—"
+                            )
+
+                            tbl = features[
+                                [
+                                    "name",
+                                    "kind",
+                                    "activities_list",
+                                    "distance_km",
+                                    "road_distance_m",
+                                    "badges",
+                                    "score",
+                                ]
+                            ].copy()
+                            tbl["distance_km"] = tbl["distance_km"].map(
+                                lambda x: f"{x:.2f} km"
+                            )
+                            tbl["road_distance_m"] = tbl["road_distance_m"].map(
+                                lambda x: (f"{int(x)} m" if pd.notna(x) else "—")
+                            )
                             st.dataframe(tbl, hide_index=True, use_container_width=True)
 
                             csv = features.drop(columns=["tags"]).to_csv(index=False)
-                            st.download_button("Download results (CSV)", csv, "activities.csv", "text/csv")
+                            st.download_button(
+                                "Download results (CSV)", csv, "activities.csv", "text/csv"
+                            )
 
-                            search_ok = True  # everything needed for the map is now ready
+                            search_ok = True  # we can render the map
 
-    # --- Map (render only when a search completed successfully)
+    # --- Map
     st.subheader("Map")
     if search_ok and features is not None and not features.empty:
-        _safe_cols = ["lat","lon","name","distance_km","score","activities_list","badges","road_distance_m"]
+        _safe_cols = [
+            "lat",
+            "lon",
+            "name",
+            "distance_km",
+            "score",
+            "activities_list",
+            "badges",
+            "road_distance_m",
+        ]
         map_df = features[_safe_cols].copy()
-        map_df["lat"]=map_df["lat"].astype(float); map_df["lon"]=map_df["lon"].astype(float)
-        map_df["distance_km"]=map_df["distance_km"].astype(float); map_df["score"]=map_df["score"].astype(float)
-        map_df["activities_list"]=map_df["activities_list"].astype(str); map_df["badges"]=map_df["badges"].astype(str)
-        map_df["road_distance_m"] = map_df["road_distance_m"].apply(lambda x: None if pd.isna(x) else float(x))
+        map_df["lat"] = map_df["lat"].astype(float)
+        map_df["lon"] = map_df["lon"].astype(float)
+        map_df["distance_km"] = map_df["distance_km"].astype(float)
+        map_df["score"] = map_df["score"].astype(float)
+        map_df["activities_list"] = map_df["activities_list"].astype(str)
+        map_df["badges"] = map_df["badges"].astype(str)
+        map_df["road_distance_m"] = map_df["road_distance_m"].apply(
+            lambda x: None if pd.isna(x) else float(x)
+        )
+
         def _fmt_tooltip(r):
             rd = "—" if (r.get("road_distance_m") is None) else f"{int(r['road_distance_m'])} m"
-            return f"{r['name']} — score {r['score']:.0f}\nActivities: {r['activities_list']}\nAttributes: {r['badges']}\n{r['distance_km']:.2f} km away | Road: {rd}"
+            return (
+                f"{r['name']} — score {r['score']:.0f}\n"
+                f"Activities: {r['activities_list']}\n"
+                f"Attributes: {r['badges']}\n"
+                f"{r['distance_km']:.2f} km away | Road: {rd}"
+            )
+
         map_df["tooltip"] = map_df.apply(_fmt_tooltip, axis=1).astype(str)
 
-        initial_view = pdk.ViewState(latitude=float(lat), longitude=float(lon), zoom=12, pitch=0)
-        layer_points = pdk.Layer("ScatterplotLayer", data=map_df, get_position='[lon, lat]', get_radius=100, pickable=True, radius_min_pixels=6, radius_max_pixels=40)
-        layer_text = pdk.Layer("TextLayer", data=map_df, get_position='[lon, lat]', get_text="name", get_size=12, get_alignment_baseline='"bottom"')
-        circle_data = pd.DataFrame([{"lat": float(lat), "lon": float(lon), "r": float(radius_km) * 1000.0}])
-        layer_center = pdk.Layer("ScatterplotLayer", data=circle_data, get_position='[lon, lat]', get_radius="r", radius_min_pixels=0, radius_max_pixels=2000, stroked=True, filled=False, line_width_min_pixels=1)
-        deck = pdk.Deck(map_style=None, initial_view_state=initial_view, layers=[layer_center, layer_points, layer_text], tooltip={"text": "{tooltip}"})
+        initial_view = pdk.ViewState(
+            latitude=float(lat), longitude=float(lon), zoom=12, pitch=0
+        )
+        layer_points = pdk.Layer(
+            "ScatterplotLayer",
+            data=map_df,
+            get_position="[lon, lat]",
+            get_radius=100,
+            pickable=True,
+            radius_min_pixels=6,
+            radius_max_pixels=40,
+        )
+        layer_text = pdk.Layer(
+            "TextLayer",
+            data=map_df,
+            get_position="[lon, lat]",
+            get_text="name",
+            get_size=12,
+            get_alignment_baseline='"bottom"',
+        )
+        circle_data = pd.DataFrame(
+            [{"lat": float(lat), "lon": float(lon), "r": float(radius_km) * 1000.0}]
+        )
+        layer_center = pdk.Layer(
+            "ScatterplotLayer",
+            data=circle_data,
+            get_position="[lon, lat]",
+            get_radius="r",
+            radius_min_pixels=0,
+            radius_max_pixels=2000,
+            stroked=True,
+            filled=False,
+            line_width_min_pixels=1,
+        )
+        deck = pdk.Deck(
+            map_style=None,
+            initial_view_state=initial_view,
+            layers=[layer_center, layer_points, layer_text],
+            tooltip={"text": "{tooltip}"},
+        )
         st.pydeck_chart(deck)
     else:
         st.info("Run a search to view the map.")
@@ -909,7 +1100,7 @@ with tab_community:
                     elif not su_user.strip():
                         st.error("Username required.")
                     else:
-                        uid = create_user(su_user.strip(), su_email.strip() or None, su_pw1)
+                        uid = create_user(su_user.strip(), (su_email.strip() or None), su_pw1)
                         st.session_state.user_id = uid
                         st.success("Welcome! Account created.")
                         _safe_rerun()
@@ -936,18 +1127,49 @@ with tab_community:
         with p1:
             p_sens = st.multiselect(
                 "Sensitivities",
-                ["UV sensitivity","Pollen sensitivity","Breathing sensitivity","Smog sensitivity","Low impact","Noise sensitivity","Privacy","Accessibility"],
-                default=my_sens
+                [
+                    "UV sensitivity",
+                    "Pollen sensitivity",
+                    "Breathing sensitivity",
+                    "Smog sensitivity",
+                    "Low impact",
+                    "Noise sensitivity",
+                    "Privacy",
+                    "Accessibility",
+                ],
+                default=my_sens,
             )
         with p2:
             p_acts = st.multiselect(
                 "Favorite activities",
-                ["Walking","Hiking","Running","Cycling","Swimming","Museums","Botanical gardens","Farms","Beaches","Playgrounds","Fitness stations","Community events","Ice skating","Sports fields","Parks","Community centers","Tracks","Greenways"],
-                default=my_acts
+                [
+                    "Walking",
+                    "Hiking",
+                    "Running",
+                    "Cycling",
+                    "Swimming",
+                    "Museums",
+                    "Botanical gardens",
+                    "Farms",
+                    "Beaches",
+                    "Playgrounds",
+                    "Fitness stations",
+                    "Community events",
+                    "Ice skating",
+                    "Sports fields",
+                    "Parks",
+                    "Community centers",
+                    "Tracks",
+                    "Greenways",
+                ],
+                default=my_acts,
             )
         savep = st.form_submit_button("Save profile")
     if savep:
         update_profile(me["id"], bio, p_sens, p_acts)
+        # seed Explore defaults immediately
+        st.session_state["default_sensitivities"] = list(p_sens)
+        st.session_state["default_include_activities"] = list(p_acts)
         st.success("Profile updated.")
         me = get_user(me["id"])
 
@@ -958,28 +1180,56 @@ with tab_community:
         q = st.text_input("Search groups", value="")
         rows = list_groups(q)
         st.caption("Browse groups and join ones that match your interests.")
+
+        # track a local selection so we can render details in the same run
+        selected_gid = st.session_state.get("view_group_id")
+
         for g in rows[:50]:
             with st.container(border=True):
                 st.markdown(f"**{g['name']}**  \n{g.get('description') or ''}")
-                st.caption(f"City: {g.get('city') or '—'} • Owner: {g['owner_name']} • Tags: {', '.join(json.loads(g['tags'] or '[]')) or '—'}")
-                jcols = st.columns(3)
+                st.caption(
+                    f"City: {g.get('city') or '—'} • "
+                    f"Owner: {g['owner_name']} • "
+                    f"Tags: {', '.join(json.loads(g['tags'] or '[]')) or '—'}"
+                )
+                jcols = st.columns(4)
                 with jcols[0]:
                     if st.button("View", key=f"view_g_{g['id']}"):
                         st.session_state["view_group_id"] = g["id"]
+                        selected_gid = g["id"]
                 with jcols[1]:
                     if not is_member(g["id"], me["id"]):
                         if st.button("Join", key=f"join_g_{g['id']}"):
                             join_group(g["id"], me["id"])
+                            st.session_state["view_group_id"] = g["id"]
+                            selected_gid = g["id"]
                             st.success("Joined group.")
-                            _safe_rerun()
                     else:
                         st.caption("You are a member")
                 with jcols[2]:
-                    if is_member(g["id"], me["id"]) and (g["owner_id"] != me["id"]):
-                        if st.button("Leave", key=f"leave_g_{g['id']}"):
-                            leave_group(g["id"], me["id"])
-                            st.warning("Left group.")
-                            _safe_rerun()
+                    if is_member(g["id"], me["id"]):
+                        is_owner = (g["owner_id"] == me["id"])
+                        if not is_owner:
+                            if st.button("Leave", key=f"leave_g_{g['id']}"):
+                                leave_group(g["id"], me["id"])
+                                if st.session_state.get("view_group_id") == g["id"]:
+                                    st.session_state["view_group_id"] = None
+                                st.warning("Left group.")
+                        else:
+                            # Owner controls
+                            mcount = group_member_count(g["id"])
+                            if mcount <= 1:
+                                if st.button("Delete group", key=f"del_g_{g['id']}"):
+                                    delete_group(g["id"])
+                                    if st.session_state.get("view_group_id") == g["id"]:
+                                        st.session_state["view_group_id"] = None
+                                    st.warning("Group deleted.")
+                            else:
+                                st.caption("Owner: transfer/remove members to delete.")
+                with jcols[3]:
+                    if st.button("Open", key=f"open_g_{g['id']}"):
+                        st.session_state["view_group_id"] = g["id"]
+                        selected_gid = g["id"]
 
     with gR:
         st.caption("Create a new group")
@@ -998,7 +1248,7 @@ with tab_community:
                 join_group(gid, me["id"], role="owner")
                 st.success("Group created.")
                 st.session_state["view_group_id"] = gid
-                _safe_rerun()
+                selected_gid = gid
 
         # My groups quick list
         st.caption("Your groups")
@@ -1009,17 +1259,21 @@ with tab_community:
     st.divider()
 
     # --- Group detail & outings
-    view_gid = st.session_state.get("view_group_id")
+    view_gid = selected_gid
     if view_gid:
         g = get_group(view_gid)
         if not g:
             st.warning("Group not found.")
         else:
             st.markdown(f"### {g['name']}")
-            st.caption(f"Owner: {g['owner_name']} • City: {g.get('city') or '—'} • Tags: {', '.join(json.loads(g['tags'] or '[]')) or '—'}")
+            st.caption(
+                f"Owner: {g['owner_name']} • "
+                f"City: {g.get('city') or '—'} • "
+                f"Tags: {', '.join(json.loads(g['tags'] or '[]')) or '—'}"
+            )
             mem = is_member(g["id"], me["id"])
 
-            cols = st.columns([2,2])
+            cols = st.columns([2, 2])
             with cols[0]:
                 st.markdown("#### Outings")
                 outings = list_outings(g["id"])
@@ -1030,22 +1284,31 @@ with tab_community:
                         with st.container(border=True):
                             when_local = local_time_str(o.get("time_utc"), o.get("lat"), o.get("lon"))
                             st.markdown(f"**{o['title']}** — {when_local}")
-                            st.caption(f"Where: {o.get('location_name') or 'TBD'} • Host: {o['creator']} • Max: {o.get('max_people') or '—'}")
+                            st.caption(
+                                f"Where: {o.get('location_name') or 'TBD'} • "
+                                f"Host: {o['creator']} • "
+                                f"Max: {o.get('max_people') or '—'}"
+                            )
                             if o.get("notes"):
                                 st.write(o["notes"])
                             counts = rsvp_counts(o["id"])
-                            st.caption(f"RSVPs — going: {counts.get('going',0)}, maybe: {counts.get('maybe',0)}, not going: {counts.get('not_going',0)}")
+                            st.caption(
+                                f"RSVPs — going: {counts.get('going',0)}, maybe: {counts.get('maybe',0)}, not going: {counts.get('not_going',0)}"
+                            )
                             if mem:
                                 b1, b2, b3 = st.columns(3)
                                 with b1:
                                     if st.button("I'm going", key=f"go_{o['id']}"):
-                                        rsvp(o["id"], me["id"], "going"); _safe_rerun()
+                                        rsvp(o["id"], me["id"], "going")
+                                        st.toast("RSVP updated: going")
                                 with b2:
                                     if st.button("Maybe", key=f"maybe_{o['id']}"):
-                                        rsvp(o["id"], me["id"], "maybe"); _safe_rerun()
+                                        rsvp(o["id"], me["id"], "maybe")
+                                        st.toast("RSVP updated: maybe")
                                 with b3:
                                     if st.button("Not going", key=f"ng_{o['id']}"):
-                                        rsvp(o["id"], me["id"], "not_going"); _safe_rerun()
+                                        rsvp(o["id"], me["id"], "not_going")
+                                        st.toast("RSVP updated: not going")
                             else:
                                 st.caption("Join this group to RSVP.")
 
@@ -1056,11 +1319,22 @@ with tab_community:
                 else:
                     with st.form(f"new_outing_{g['id']}"):
                         t_title = st.text_input("Title", placeholder="Sunset walk on the greenway")
-                        t_date = st.date_input("Date")
-                        t_time = st.time_input("Start time", value=datetime.now().time().replace(second=0, microsecond=0))
+                        t_date = st.date_input("Date", value=_date.today())
+                        t_time = st.time_input(
+                            "Start time",
+                            value=datetime.now().time().replace(second=0, microsecond=0),
+                        )
                         t_place = st.text_input("Location name or address", placeholder="Deering Oaks Park")
-                        t_max = st.number_input("Max participants (optional)", min_value=0, value=0, step=1, help="0 means unlimited")
-                        t_notes = st.text_area("Notes (optional)", placeholder="Pace will be easy; bring water.")
+                        t_max = st.number_input(
+                            "Max participants (optional)",
+                            min_value=0,
+                            value=0,
+                            step=1,
+                            help="0 means unlimited",
+                        )
+                        t_notes = st.text_area(
+                            "Notes (optional)", placeholder="Pace will be easy; bring water."
+                        )
                         submit_out = st.form_submit_button("Create outing")
                     if submit_out:
                         if not t_title.strip():
@@ -1074,49 +1348,94 @@ with tab_community:
                                 if geo:
                                     lat_o, lon_o = geo["lat"], geo["lon"]
                                     loc_o = geo["display_name"]
-                            tzname_g = guess_timezone(lat_o, lon_o) if (lat_o is not None and lon_o is not None) else "UTC"
+                            # pick tz from place if available, else user's timezone
+                            tzname_g = (
+                                guess_timezone(lat_o, lon_o)
+                                if (lat_o is not None and lon_o is not None)
+                                else "America/New_York"
+                            )
                             tz = pytz.timezone(tzname_g)
-                            dt_local = datetime.combine(t_date, t_time)
-                            dt_local = tz.localize(dt_local)
+                            dt_local = tz.localize(datetime.combine(t_date, t_time))
                             time_utc = dt_local.astimezone(pytz.utc).isoformat()
-                            _ = create_outing(
-                                g["id"], t_title.strip(), time_utc, loc_o,
-                                lat_o, lon_o, (int(t_max) or None), t_notes.strip(), me["id"]
+                            create_outing(
+                                g["id"],
+                                t_title.strip(),
+                                time_utc,
+                                loc_o,
+                                lat_o,
+                                lon_o,
+                                (int(t_max) or None),
+                                t_notes.strip(),
+                                me["id"],
                             )
                             st.success("Outing created.")
-                            _safe_rerun()
+                            # keep showing this group's detail
+                            st.session_state["view_group_id"] = g["id"]
 
             # Map of group outings (if any have coords)
-            coords = [o for o in list_outings(g["id"]) if o.get("lat") is not None and o.get("lon") is not None]
+            coords = [
+                o
+                for o in list_outings(g["id"])
+                if o.get("lat") is not None and o.get("lon") is not None
+            ]
             if coords:
                 st.markdown("#### Outings map")
-                map_df = pd.DataFrame([{
-                    "name": o["title"],
-                    "lat": float(o["lat"]),
-                    "lon": float(o["lon"]),
-                    "when_local": local_time_str(o.get("time_utc"), o.get("lat"), o.get("lon")),
-                    "where": o.get("location_name") or "",
-                } for o in coords])
-                # Ensure string-only tooltip; no JS date parsing
+                map_df = pd.DataFrame(
+                    [
+                        {
+                            "name": o["title"],
+                            "lat": float(o["lat"]),
+                            "lon": float(o["lon"]),
+                            "when_local": local_time_str(
+                                o.get("time_utc"), o.get("lat"), o.get("lon")
+                            ),
+                            "where": o.get("location_name") or "",
+                        }
+                        for o in coords
+                    ]
+                )
                 map_df["tooltip"] = map_df.apply(
-                    lambda r: f"{r['name']}\n{r['where']}\n{r['when_local']}",
-                    axis=1
+                    lambda r: f"{r['name']}\n{r['where']}\n{r['when_local']}", axis=1
                 ).astype(str)
-                # Coerce to strict types; drop bad rows
                 map_df["lat"] = map_df["lat"].astype(float)
                 map_df["lon"] = map_df["lon"].astype(float)
-                map_df = map_df.dropna(subset=["lat","lon"])
+                map_df = map_df.dropna(subset=["lat", "lon"])
                 if not map_df.empty:
                     center_lat = float(map_df["lat"].mean())
                     center_lon = float(map_df["lon"].mean())
-                    iv = pdk.ViewState(latitude=center_lat, longitude=center_lon, zoom=11, pitch=0)
-                    layer_points = pdk.Layer("ScatterplotLayer", data=map_df, get_position='[lon, lat]', get_radius=120, pickable=True, radius_min_pixels=6, radius_max_pixels=40)
-                    layer_text = pdk.Layer("TextLayer", data=map_df, get_position='[lon, lat]', get_text="name", get_size=12, get_alignment_baseline='"bottom"')
-                    deck = pdk.Deck(map_style=None, initial_view_state=iv, layers=[layer_points, layer_text], tooltip={"text": "{tooltip}"})
+                    iv = pdk.ViewState(
+                        latitude=center_lat, longitude=center_lon, zoom=11, pitch=0
+                    )
+                    layer_points = pdk.Layer(
+                        "ScatterplotLayer",
+                        data=map_df,
+                        get_position="[lon, lat]",
+                        get_radius=120,
+                        pickable=True,
+                        radius_min_pixels=6,
+                        radius_max_pixels=40,
+                    )
+                    layer_text = pdk.Layer(
+                        "TextLayer",
+                        data=map_df,
+                        get_position="[lon, lat]",
+                        get_text="name",
+                        get_size=12,
+                        get_alignment_baseline='"bottom"',
+                    )
+                    deck = pdk.Deck(
+                        map_style=None,
+                        initial_view_state=iv,
+                        layers=[layer_points, layer_text],
+                        tooltip={"text": "{tooltip}"},
+                    )
                     st.pydeck_chart(deck)
 
 # -----------------------------
 # Footer
 # -----------------------------
 st.markdown("---")
-st.write("Data © OpenStreetMap contributors. Weather via OpenWeatherMap (if key provided). Profiles/groups/outings stored locally in SQLite (data.db). Please be respectful and safe when meeting others.")
+st.write(
+    "Data © OpenStreetMap contributors. Weather via OpenWeatherMap (if key provided). "
+    "Profiles/groups/outings stored locally in SQLite (data.db). Please be respectful and safe when meeting others."
+)
