@@ -44,7 +44,7 @@ st.set_page_config(
 # THEME / CSS (safe injector)
 # =========================
 def inject_theme():
-    st.html("""
+    st.markdown("""
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Nunito:wght@800&display=swap" rel="stylesheet">
     <style>
@@ -61,10 +61,16 @@ def inject_theme():
         background:var(--hp-bg);
       }
 
+      /* Trim global paddings/gaps so list+map sit right under filters */
+      .block-container { padding-top: .4rem !important; }
+      [data-testid="stVerticalBlock"] > div { margin-top: 0 !important; }
+      [data-testid="stHorizontalBlock"] > div { margin-top: 0 !important; }
+      [data-testid="stColumn"] > div { padding-top: 0 !important; margin-top: 0 !important; }
+
       /* Header bar */
       .hp-header{
         position:sticky; top:0; z-index:999;
-        margin:-1.2rem -1rem .5rem -1rem;
+        margin:-1.2rem -1rem .4rem -1rem;
         padding:.6rem 1rem;
         background:linear-gradient(90deg,var(--hp-teal) 0%, var(--hp-primary) 100%);
         box-shadow:0 3px 18px rgba(0,0,0,.12);
@@ -92,7 +98,8 @@ def inject_theme():
       /* Toggle row spacing */
       .hp-toggle-row label{margin-right:14px;}
 
-      /* Two-pane results: left list scrolls, right map fixed height */
+      /* Two-pane: left list scrolls, right map fixed height; remove extra gaps */
+      .hp-results-wrap { margin-top: 6px; }
       .hp-results-left{
         overflow: auto;
         padding-right: 6px;
@@ -102,7 +109,7 @@ def inject_theme():
       .hp-card h4, .hp-card h3, .hp-card h2{margin: 0 0 2px 0;}
       .hp-card .stCaption, .hp-card p {margin: 2px 0;}
 
-      /* Clickable list item: make the header button look like text */
+      /* Clickable list item: button styled like text */
       .hp-item-btn button{
         width: 100% !important;
         text-align: left !important;
@@ -115,10 +122,10 @@ def inject_theme():
       }
       .hp-item-btn button:hover{ text-decoration: underline; }
 
-      /* Always reserve space for the two-pane section so it doesn't jump */
-      .hp-reserve{ min-height: 740px; }
+      /* Tighten expanders slightly */
+      details > summary { padding: 2px 0 !important; }
     </style>
-    """)
+    """, unsafe_allow_html=True)
 
 def render_brand_header(active_route: str):
     try:
@@ -129,7 +136,7 @@ def render_brand_header(active_route: str):
     except Exception:
         logo_html = '<div style="font-size:28px;line-height:1;">🩺</div>'
 
-    st.html(f"""
+    st.markdown(f"""
       <div class="hp-header">
         <div class="hp-row">
           <div class="hp-brand">{logo_html}</div>
@@ -139,7 +146,7 @@ def render_brand_header(active_route: str):
           </div>
         </div>
       </div>
-    """)
+    """, unsafe_allow_html=True)
 
     left, ex_col, cm_col, prof_col = st.columns([0.64, 0.12, 0.12, 0.12])
     with ex_col:
@@ -158,13 +165,13 @@ def render_brand_header(active_route: str):
 
     active_map = {"explore":"nav_explore","community":"nav_community","profile":"nav_profile"}
     active_key = active_map.get(active_route, "nav_explore")
-    st.html(f"""
+    st.markdown(f"""
       <style>
         button[data-testid="baseButton-secondary"][id*="{active_key}"] {{
             background:#fff !important; color:#0f4da2 !important; border:0 !important;
         }}
       </style>
-    """)
+    """, unsafe_allow_html=True)
 
 inject_theme()
 if "route" not in st.session_state:
@@ -891,18 +898,22 @@ def set_route(r):
     safe_rerun()
 
 # Helpers to persist results across reruns and to show aligned list+map even before search
-def _store_results(features_df, center_lat, center_lon, tzname):
-    if features_df is None or features_df.empty:
-        st.session_state["results"] = {"features": [], "center": {"lat": center_lat, "lon": center_lon}, "tz": tzname}
-    else:
-        feats = features_df.to_dict(orient="records")
-        st.session_state["results"] = {"features": feats, "center": {"lat": center_lat, "lon": center_lon}, "tz": tzname}
+def _store_results(features_df, center_lat, center_lon, tzname, loc_display=None, windows_text=None, notes=None):
+    payload = {
+        "features": [] if features_df is None or features_df.empty else features_df.to_dict(orient="records"),
+        "center": {"lat": center_lat, "lon": center_lon},
+        "tz": tzname,
+        "loc_display": loc_display,
+        "windows_text": windows_text,
+        "weather_notes": notes or []
+    }
+    st.session_state["results"] = payload
 
 def _load_results():
-    return st.session_state.get("results", {"features": [], "center": None, "tz": "UTC"})
+    return st.session_state.get("results", {"features": [], "center": None, "tz": "UTC", "loc_display": None, "windows_text": None, "weather_notes": []})
 
 # =========================
-# EXPLORE PAGE (always-aligned list+map; scrollable list; focus on click)
+# EXPLORE PAGE (tight filters; no gaps; aligned two-pane)
 # =========================
 def page_explore():
     st.markdown("### 🔍 Explore activities near you")
@@ -920,7 +931,7 @@ def page_explore():
 
     # ======== COMPACT FILTER BAR ========
     st.markdown('<div class="hp-card hp-compact">', unsafe_allow_html=True)
-    c1, c2, c3 = st.columns([4, 1.5, 1])
+    c1, c2, c3 = st.columns([4, 1.6, 1])
     with c1:
         address = st.text_input("Where?", value=st.session_state.get("last_address", "Portland, ME"), placeholder="City / address / ZIP")
     with c2:
@@ -947,8 +958,8 @@ def page_explore():
             "Tracks","Greenways","Free","Paid"
         ]
         include_default = sorted(default_inc) if default_inc else []
-        include_set = set(st.multiselect("Include activities (any)", ALL_ACTIVITIES, default=st.session_state.get("inc_ms", include_default), key="inc_ms"))
-        exclude_set = set(st.multiselect("Exclude activities", ALL_ACTIVITIES, default=st.session_state.get("exc_ms", []), key="exc_ms"))
+        include_set = set(st.multiselect("Include (any)", ALL_ACTIVITIES, default=st.session_state.get("inc_ms", include_default), key="inc_ms"))
+        exclude_set = set(st.multiselect("Exclude", ALL_ACTIVITIES, default=st.session_state.get("exc_ms", []), key="exc_ms"))
 
     st.markdown('<div class="hp-toggle-row">', unsafe_allow_html=True)
     tl1, tl2, tl3, tl4, tl5, tl6, tl7, tl8 = st.columns(8)
@@ -967,75 +978,22 @@ def page_explore():
         if q_near and st.session_state.get("q_away"):
             st.session_state["q_away"] = False
     st.markdown('</div>', unsafe_allow_html=True)
-
-    # Presets (collapsed)
-    if me:
-        with st.expander("⭐ Presets", expanded=False):
-            colP1, colP2 = st.columns([1.8, 2.2])
-            with colP1:
-                preset_name = st.text_input("Name", key="save_preset_name", placeholder="e.g., Indoor easy")
-                if st.button("Save", key="btn_save_preset"):
-                    payload = {
-                        "include": sorted(list(include_set)),
-                        "exclude": sorted(list(exclude_set)),
-                        "toggles": {
-                            "q_indoor": q_indoor, "q_shaded": q_shaded, "q_waterfront": q_waterfront,
-                            "q_paved": q_paved, "q_wheel": q_wheel, "q_free": q_free,
-                            "q_away": q_away, "q_near": q_near
-                        },
-                        "sensitivities": sensitivities,
-                        "radius_km": radius_km,
-                        "address": address
-                    }
-                    if not preset_name.strip():
-                        st.error("Please name your preset.")
-                    else:
-                        create_preset(me["id"], preset_name.strip(), payload)
-                        st.toast("Preset saved ⭐", icon="⭐")
-                        safe_rerun()
-            with colP2:
-                user_presets = list_presets(me["id"])
-                if not user_presets:
-                    st.caption("No presets yet.")
-                else:
-                    for p in user_presets[:25]:
-                        pl = json.loads(p["payload"])
-                        cA, cB, cC = st.columns([0.5, 1.4, 0.6])
-                        with cA:
-                            if st.button("Apply", key=f"apply_{p['id']}"):
-                                st.session_state["inc_ms"] = pl.get("include", [])
-                                st.session_state["exc_ms"] = pl.get("exclude", [])
-                                for k, v in pl.get("toggles", {}).items(): st.session_state[k] = bool(v)
-                                st.session_state["sens_pick"] = pl.get("sensitivities", [])
-                                st.session_state["radius_km"] = int(pl.get("radius_km", radius_km))
-                                st.session_state["last_address"] = pl.get("address", address)
-                                st.toast(f"Applied preset: {p['name']}", icon="✅")
-                                safe_rerun()
-                        with cB:
-                            st.markdown(f"**{p['name']}**")
-                            st.caption(p["created_at"])
-                        with cC:
-                            if st.button("Delete", key=f"del_{p['id']}"):
-                                if delete_preset(p["id"], me["id"]):
-                                    st.toast("Preset deleted", icon="🗑️"); safe_rerun()
     st.markdown('</div>', unsafe_allow_html=True)  # end filter card
 
-    # ======== ALWAYS RENDER THE TWO-PANE SECTION (aligned & scrollable) ========
+    # ======== ALWAYS RENDER THE TWO-PANE SECTION DIRECTLY (no cards in between) ========
     MAP_H = 680
-    st.markdown(f"<style>.hp-results-left{{height:{MAP_H}px;}} .hp-reserve{{min-height:{MAP_H+60}px}}</style>", unsafe_allow_html=True)
-
-    # If the user hasn't searched yet, show a baseline centered on the default address
+    st.markdown(f"<style>.hp-results-left{{height:{MAP_H}px;}}</style>", unsafe_allow_html=True)
     need_fresh_results = False
+
     if go:
         st.session_state["last_address"] = address
         need_fresh_results = True
     elif "results" not in st.session_state:
-        # First load: geocode default to center the map (no markers yet)
         base_loc = geocode_address(address.strip()) or {"lat": 43.661, "lon": -70.255, "display_name":"Portland, ME"}
-        _store_results(pd.DataFrame([]), base_loc["lat"], base_loc["lon"], guess_timezone(base_loc["lat"], base_loc["lon"]))
+        _store_results(pd.DataFrame([]), base_loc["lat"], base_loc["lon"], guess_timezone(base_loc["lat"], base_loc["lon"]),
+                       loc_display=base_loc.get("display_name"), windows_text=None, notes=[])
 
     if need_fresh_results:
-        # ======== RUN SEARCH ========
         if not address.strip():
             st.error("Please enter a city/address/ZIP.")
             return
@@ -1047,31 +1005,20 @@ def page_explore():
         tzname = guess_timezone(lat, lon)
         keys = load_optional_keys()
 
-        st.markdown('<div class="hp-card">', unsafe_allow_html=True)
-        l1, l2 = st.columns([2.2, 2.8])
-        with l1:
-            st.subheader("Location")
-            st.caption(loc["display_name"])
-            st.caption(f"Lat/Lon: {lat:.5f}, {lon:.5f} • {tzname}")
-        with l2:
-            weather_ctx = fetch_weather_context(lat, lon, tzname, keys)
-            windows = build_time_windows(weather_ctx, set(sensitivities))
-            st.markdown("**Suggested times today (local):** " + format_window_str(windows))
-            if weather_ctx.get("notes"):
-                with st.expander("Weather notes"):
-                    for n in weather_ctx["notes"]:
-                        st.write("• " + n)
-        st.markdown('</div>', unsafe_allow_html=True)
+        weather_ctx = fetch_weather_context(lat, lon, tzname, keys)
+        windows = build_time_windows(weather_ctx, set(sensitivities))
+        windows_text = format_window_str(windows)
+        weather_notes = weather_ctx.get("notes") or []
 
         with st.spinner("Querying OpenStreetMap for places..."):
             places = fetch_places(lat, lon, radius_km)
             roads  = fetch_roads(lat, lon, radius_km)
 
         if places.empty:
-            _store_results(pd.DataFrame([]), lat, lon, tzname)
+            _store_results(pd.DataFrame([]), lat, lon, tzname, loc_display=loc["display_name"],
+                           windows_text=windows_text, notes=weather_notes)
             st.warning("No public activity places found within that radius. Try enlarging the search.")
         else:
-            # compute distances to roads
             def nearest_road_m(latp, lonp):
                 if roads is None or roads.empty: return None
                 dmins = [haversine_km(latp, lonp, rlat, rlon)*1000 for rlat, rlon in zip(roads["lat"].values, roads["lon"].values)]
@@ -1086,7 +1033,6 @@ def page_explore():
                 feats.append({**row.to_dict(), **cls, "score": score})
             features = pd.DataFrame(feats)
 
-            # filters
             def _match_sets(activity_set: set[str], inc: set[str], exc: set[str]) -> bool:
                 if activity_set & exc: return False
                 if inc and not (activity_set & inc): return False
@@ -1109,20 +1055,21 @@ def page_explore():
 
             TOP_N = 30
             if features.empty:
-                _store_results(pd.DataFrame([]), lat, lon, tzname)
+                _store_results(pd.DataFrame([]), lat, lon, tzname, loc_display=loc["display_name"],
+                               windows_text=windows_text, notes=weather_notes)
                 st.warning("No places match those filters. Try clearing some toggles.")
             else:
                 features = features.sort_values(["score","distance_km"], ascending=[False, True]).reset_index(drop=True).head(TOP_N)
                 features["rank"] = features.index + 1
-                _store_results(features, lat, lon, tzname)
+                _store_results(features, lat, lon, tzname, loc_display=loc["display_name"],
+                               windows_text=windows_text, notes=weather_notes)
 
-    # ======== RENDER TWO-PANE (ALWAYS) ========
+    # ======== RENDER TWO-PANE (aligned, no spacer above) ========
     bundle = _load_results()
     feats_list = bundle["features"]
     center = bundle["center"] or {"lat": 43.661, "lon": -70.255}
     tzname = bundle.get("tz", "UTC")
 
-    # Keep map focus if set; else compute from features
     if "map_focus" not in st.session_state:
         st.session_state["map_focus"] = None
 
@@ -1144,12 +1091,26 @@ def page_explore():
         else: zoom = 9.5
         return center_lat, center_lon, zoom
 
-    st.markdown('<div class="hp-reserve">', unsafe_allow_html=True)
+    # Two columns with zero top margin; wrap in a div to keep them tight under filters
+    st.markdown('<div class="hp-results-wrap">', unsafe_allow_html=True)
     colL, colR = st.columns([1.05, 1.95], gap="small")
 
     # -------- LIST (left) --------
     with colL:
         st.markdown(f'<div class="hp-results-left" style="height:{MAP_H}px;">', unsafe_allow_html=True)
+
+        # Context bar lives INSIDE the left pane (so no vertical gap above columns)
+        if bundle.get("loc_display") or bundle.get("windows_text"):
+            with st.expander("Context (location & weather)", expanded=False):
+                if bundle.get("loc_display"):
+                    st.caption(bundle["loc_display"])
+                st.caption(f"Timezone: {tzname}")
+                if bundle.get("windows_text"):
+                    st.caption("Suggested times today: " + bundle["windows_text"])
+                if bundle.get("weather_notes"):
+                    for n in bundle["weather_notes"]:
+                        st.text("• " + n)
+
         if not feats_list:
             st.markdown('<div class="hp-card">', unsafe_allow_html=True)
             st.caption("Results will appear here after you search.")
@@ -1182,21 +1143,19 @@ def page_explore():
                 chips.append(f'<span class="hp-chip">{acts}</span>')
                 st.markdown(" ".join(chips), unsafe_allow_html=True)
                 st.markdown('</div>', unsafe_allow_html=True)
+
         st.markdown('</div>', unsafe_allow_html=True)
 
     # -------- MAP (right) --------
     with colR:
-        # Build dataframe for map markers (only items in list)
         if feats_list:
             map_df = pd.DataFrame(feats_list)[["lat","lon","name","rank","distance_km","score"]].copy()
             for c in ["lat","lon","distance_km","score","rank"]:
                 map_df[c] = map_df[c].astype(float)
             map_df["tooltip"] = map_df.apply(lambda rr: f"{int(rr['rank'])}. {rr['name']}\\n{rr['distance_km']:.2f} km — score {rr['score']:.0f}", axis=1)
         else:
-            # empty df to render no markers
             map_df = pd.DataFrame(columns=["lat","lon","name","rank","distance_km","score","tooltip"])
 
-        # Choose initial view
         if st.session_state.get("map_focus"):
             fc = st.session_state["map_focus"]
             init_view = pdk.ViewState(latitude=fc["lat"], longitude=fc["lon"], zoom=15, pitch=0)
@@ -1204,7 +1163,6 @@ def page_explore():
             c_lat, c_lon, c_zoom = compute_autofit_view(map_df)
             init_view = pdk.ViewState(latitude=c_lat, longitude=c_lon, zoom=c_zoom, pitch=0)
         else:
-            # baseline center on geocoded address with modest zoom
             init_view = pdk.ViewState(latitude=float(center["lat"]), longitude=float(center["lon"]), zoom=11.5, pitch=0)
 
         layers = []
@@ -1227,10 +1185,10 @@ def page_explore():
         deck = pdk.Deck(initial_view_state=init_view, layers=layers, tooltip={"text": "{tooltip}"}, map_style=None)
         st.pydeck_chart(deck, use_container_width=True, height=MAP_H)
 
-    st.markdown('</div>', unsafe_allow_html=True)  # end hp-reserve (layout spacer)
+    st.markdown('</div>', unsafe_allow_html=True)  # end results wrap
 
 # =========================
-# AUTH + COMMUNITY + PROFILE (unchanged from prior)
+# AUTH + COMMUNITY + PROFILE (unchanged)
 # =========================
 def render_auth_gate():
     if st.session_state.user_id is not None:
