@@ -47,7 +47,7 @@ def inject_theme():
     st.markdown("""
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Nunito:wght@800&display=swap" rel="stylesheet">
-    <style>
+    <style id="hp-css">
       :root{
         --hp-primary:#1273EA;
         --hp-primary-600:#0F5DC0;
@@ -129,7 +129,6 @@ def inject_theme():
     </style>
     """, unsafe_allow_html=True)
 
-
 def render_brand_header(active_route: str):
     try:
         if os.path.exists(LOGO_PATH):
@@ -169,13 +168,14 @@ def render_brand_header(active_route: str):
     active_map = {"explore":"nav_explore","community":"nav_community","profile":"nav_profile"}
     active_key = active_map.get(active_route, "nav_explore")
     st.markdown(f"""
-      <style>
+      <style id="hp-active-nav-css">
         button[data-testid="baseButton-secondary"][id*="{active_key}"] {{
             background:#fff !important; color:#0f4da2 !important; border:0 !important;
         }}
       </style>
     """, unsafe_allow_html=True)
 
+# Inject theme & header (order matters)
 inject_theme()
 if "route" not in st.session_state:
     st.session_state["route"] = "explore"
@@ -916,7 +916,7 @@ def _load_results():
     return st.session_state.get("results", {"features": [], "center": None, "tz": "UTC", "loc_display": None, "windows_text": None, "weather_notes": []})
 
 # =========================
-# EXPLORE PAGE (tight filters; no gaps; aligned two-pane)
+# EXPLORE PAGE (compact filters + aligned list/map)
 # =========================
 def page_explore():
     st.markdown("### 🔍 Explore activities near you")
@@ -1094,7 +1094,6 @@ def page_explore():
         else: zoom = 9.5
         return center_lat, center_lon, zoom
 
-    # Two columns with zero top margin; wrap in a div to keep them tight under filters
     st.markdown('<div class="hp-results-wrap">', unsafe_allow_html=True)
     colL, colR = st.columns([1.05, 1.95], gap="small")
 
@@ -1102,7 +1101,7 @@ def page_explore():
     with colL:
         st.markdown(f'<div class="hp-results-left" style="height:{MAP_H}px;">', unsafe_allow_html=True)
 
-        # Context bar lives INSIDE the left pane (so no vertical gap above columns)
+        # Context bar INSIDE the left pane (avoids vertical gap above columns)
         if bundle.get("loc_display") or bundle.get("windows_text"):
             with st.expander("Context (location & weather)", expanded=False):
                 if bundle.get("loc_display"):
@@ -1191,7 +1190,7 @@ def page_explore():
     st.markdown('</div>', unsafe_allow_html=True)  # end results wrap
 
 # =========================
-# AUTH + COMMUNITY + PROFILE (unchanged)
+# AUTH + COMMUNITY + PROFILE (unchanged except HTML handling)
 # =========================
 def render_auth_gate():
     if st.session_state.user_id is not None:
@@ -1390,7 +1389,7 @@ def page_community():
                         if st.button("I'm going", key=f"go_{o['id']}"):
                             rsvp(o["id"], me["id"], "going"); st.toast("RSVP saved", icon="✅"); safe_rerun()
                     with b2:
-                        if st.button("Maybe", key=f"maybe_{o['id']}"):
+                        if st.button("Maybe", key=f"maybe_{o['id']}"]:
                             rsvp(o["id"], me["id"], "maybe"); st.toast("RSVP saved", icon="✅"); safe_rerun()
                     with b3:
                         if st.button("Not going", key=f"ng_{o['id']}"):
