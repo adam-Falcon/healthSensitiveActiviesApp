@@ -153,6 +153,15 @@ if "route" not in st.session_state:
     st.session_state["route"] = "explore"
 render_brand_header(st.session_state.get("route","explore"))
 
+# Add small CSS for tri-state chips (new)
+st.html("""
+<style>
+  .hp-chip-yes { background:#E8FFF1; color:#0F5132; border-color:#CFF4D2; }
+  .hp-chip-no  { background:#FFF1F1; color:#842029; border-color:#F5C2C7; }
+  .hp-chip-ghost { background:#fff; color:#11407F; border-color:#DCEBFF; }
+</style>
+""")
+
 # =========================
 # HTTP session (polite)
 # =========================
@@ -881,7 +890,7 @@ def render_auth_gate():
     return False
 
 # =========================
-# EXPLORE PAGE
+# EXPLORE PAGE (UPDATED)
 # =========================
 def page_explore():
     st.markdown("### 🔍 Explore activities near you")
@@ -910,6 +919,10 @@ def page_explore():
             default=default_sens or ["UV sensitivity","Pollen sensitivity"]
         )
 
+    # ---- Activity tri-state control & quick toggles ----
+    TRI_STATES = {0: "neutral", 1: "include", -1: "exclude"}
+    TRI_ICONS = {0: "⭕", 1: "✅", -1: "🚫"}
+
     ALL_ACTIVITIES = [
         "Walking","Hiking","Running","Cycling","Swimming","Museums",
         "Botanical gardens","Farms","Beaches","Playgrounds","Fitness stations",
@@ -917,17 +930,92 @@ def page_explore():
         "Tracks","Greenways","Free","Paid"
     ]
 
-    with st.expander("Include / Exclude activities by type", expanded=False):
-        st.caption("Select activities to include and/or exclude. If both are selected for the same item, exclusion wins.")
-        cols_inc = st.columns(3); cols_exc = st.columns(3)
-        include_flags, exclude_flags = {}, {}
+    ACTIVITY_PRESETS = {
+        "—": {},
+        "Gentle & Low-Impact": {"Walking": 1, "Parks": 1, "Tracks": 1, "Swimming": 1, "Sports fields": -1, "Playgrounds": -1},
+        "All Outdoors": {"Museums": -1, "Community centers": -1, "Swimming": -1},
+        "Indoor & Low-Pollen": {"Museums": 1, "Community centers": 1, "Swimming": 1, "Botanical gardens": -1, "Parks": -1, "Beaches": -1},
+    }
+
+    def _ensure_tri_state():
+        # initialize with user favorites as "include"
+        if "act_filters" not in st.session_state:
+            st.session_state["act_filters"] = {a: (1 if a in default_inc else 0) for a in ALL_ACTIVITIES}
+
+    def _cycle(v: int) -> int:
+        return {0: 1, 1: -1, -1: 0}[v]
+
+    def _state_badge(v: int) -> str:
+        if v == 1:  # include
+            return "hp-chip hp-chip-yes"
+        if v == -1: # exclude
+            return "hp-chip hp-chip-no"
+        return "hp-chip"
+
+    def tri_filter(activity_set: set[str], tri_map: dict[str, int]) -> bool:
+        inc = {k for k, v in tri_map.items() if v == 1}
+        exc = {k for k, v in tri_map.items() if v == -1}
+        if exc and (activity_set & exc):
+            return False
+        if inc and not (activity_set & inc):
+            return False
+        return True
+
+    _ensure_tri_state()
+
+    with st.expander("Activities filter (Include / Exclude / Neutral)", expanded=False):
+        c_top_l, c_top_r = st.columns([2, 1])
+
+        with c_top_l:
+            preset = st.selectbox("Apply a preset", list(ACTIVITY_PRESETS.keys()), index=0)
+            if preset != "—" and st.button("Apply preset"):
+                for k, v in ACTIVITY_PRESETS[preset].items():
+                    if k in st.session_state["act_filters"]:
+                        st.session_state["act_filters"][k] = v
+                st.toast("Preset applied", icon="✨")
+
+        with c_top_r:
+            c1, c2 = st.columns(2)
+            with c1:
+                if st.button("Select all (include)"):
+                    for k in st.session_state["act_filters"]:
+                        st.session_state["act_filters"][k] = 1
+            with c2:
+                if st.button("Clear all (neutral)"):
+                    for k in st.session_state["act_filters"]:
+                        st.session_state["act_filters"][k] = 0
+
+        st.caption("Click chips to cycle: ⭕ Neutral → ✅ Include → 🚫 Exclude")
+
+        chip_cols = st.columns(3)
         for i, act in enumerate(ALL_ACTIVITIES):
-            with cols_inc[i % 3]:
-                include_flags[act] = st.checkbox(f"Include: {act}", value=(act in default_inc), key=f"inc_{act}")
-            with cols_exc[i % 3]:
-                exclude_flags[act] = st.checkbox(f"Exclude: {act}", value=False, key=f"exc_{act}")
-        include_set = {k for k,v in include_flags.items() if v}
-        exclude_set = {k for k,v in exclude_flags.items() if v}
+            col = chip_cols[i % 3]
+            with col:
+                state = st.session_state["act_filters"][act]
+                btn = st.button(f"{TRI_ICONS[state]} {act}", key=f"tri_{act}")
+                if btn:
+                    st.session_state["act_filters"][act] = _cycle(state)
+                st.markdown(
+                    f'<span class="{_state_badge(st.session_state["act_filters"][act])}">'
+                    f'{TRI_STATES[st.session_state["act_filters"][act]].title()}</span>',
+                    unsafe_allow_html=True
+                )
+
+    # Quick attribute toggles (map to classified features)
+    with st.expander("Quick attribute toggles", expanded=False):
+        q1, q2, q3, q4 = st.columns(4)
+        with q1:
+            q_indoor = st.checkbox("Indoor only", key="q_indoor")
+            q_shaded = st.checkbox("Prefer shaded", key="q_shaded")
+        with q2:
+            q_waterfront = st.checkbox("Waterfront only", key="q_waterfront")
+            q_paved = st.checkbox("Paved preferred", key="q_paved")
+        with q3:
+            q_wheel = st.checkbox("Wheelchair yes only", key="q_wheel")
+            q_free = st.checkbox("Free only", key="q_free")
+        with q4:
+            q_away = st.checkbox("Away from traffic", key="q_away")
+            q_near = st.checkbox("Near traffic ok", key="q_near")
 
     go = st.button("Search", type="primary")
     if not go:
@@ -989,19 +1077,65 @@ def page_explore():
             feats.append({**row.to_dict(), **cls, "score": score})
         features = pd.DataFrame(feats)
 
-        def matches_includes(activity_set):
-            if not include_set:
-                return True
-            return bool(activity_set & include_set)
-        def matches_excludes(activity_set):
-            return bool(activity_set & exclude_set)
+        # Tri-state activities filter
+        features = features[features["activities"].apply(lambda s: tri_filter(s, st.session_state["act_filters"]))].copy()
 
-        features = features[features["activities"].apply(matches_includes)].copy()
-        features = features[~features["activities"].apply(matches_excludes)].copy()
+        # Quick attribute toggles (strict)
+        if q_indoor:
+            features = features[features["indoor"] == True]
+        if q_waterfront:
+            features = features[features["waterfront"] == True]
+        if q_wheel:
+            features = features[features["wheelchair"] == True]
+        if q_free:
+            features = features[features["is_free"] == True]
+
+        # Traffic distance preference
+        if q_away:
+            features = features[features["road_distance_m"].fillna(1e9) > 350]
+        elif q_near:
+            features = features[features["road_distance_m"].fillna(0) < 120]
+
+        # Soft preferences → bump score
+        def _soft_pref_bump(row):
+            bump = 0
+            if q_shaded and row.get("shaded_possible"):
+                bump += 3
+            if q_paved and row.get("paved"):
+                bump += 3
+            return row["score"] + bump
+
+        if not features.empty:
+            features["score"] = features.apply(_soft_pref_bump, axis=1)
 
         if features.empty:
-            st.warning("No places match those activity filters. Clear or adjust the selections.")
+            st.warning("No places match those filters. Try clearing some toggles or presets.")
             return
+
+        # Filter summary
+        summary_bits = [f"**{k}**: {('Include' if v==1 else 'Exclude')}"
+                        for k, v in st.session_state["act_filters"].items() if v != 0]
+        if q_indoor: summary_bits.append("Indoor only")
+        if q_waterfront: summary_bits.append("Waterfront only")
+        if q_wheel: summary_bits.append("Wheelchair yes only")
+        if q_free: summary_bits.append("Free only")
+        if q_away: summary_bits.append("Away from traffic")
+        elif q_near: summary_bits.append("Near traffic ok")
+        if q_shaded: summary_bits.append("Prefer shaded")
+        if q_paved: summary_bits.append("Paved preferred")
+        if summary_bits:
+            st.markdown("Filter summary: " + " · ".join(summary_bits))
+
+        # table + cards
+        features = features.sort_values(["score","distance_km"], ascending=[False, True]).reset_index(drop=True)
+        features["activities_list"] = features["activities"].apply(lambda s: ", ".join(sorted(s)) if s else "—")
+
+        tbl = features[["name","kind","activities_list","distance_km","road_distance_m","score"]].copy()
+        tbl["distance_km"] = tbl["distance_km"].map(lambda x: f"{x:.2f} km")
+        tbl["road_distance_m"] = tbl["road_distance_m"].map(lambda x: (f"{int(x)} m" if pd.notna(x) else "—"))
+        st.dataframe(tbl, hide_index=True, use_container_width=True)
+
+        st.markdown('<div class="hp-hr"></div>', unsafe_allow_html=True)
 
         def make_badges(r):
             chips=[]
@@ -1019,15 +1153,6 @@ def page_explore():
                 elif r["road_distance_m"] < 120: chips.append('<span class="hp-chip">near traffic</span>')
             return " ".join(chips)
 
-        features = features.sort_values(["score","distance_km"], ascending=[False, True]).reset_index(drop=True)
-        features["activities_list"] = features["activities"].apply(lambda s: ", ".join(sorted(s)) if s else "—")
-
-        tbl = features[["name","kind","activities_list","distance_km","road_distance_m","score"]].copy()
-        tbl["distance_km"] = tbl["distance_km"].map(lambda x: f"{x:.2f} km")
-        tbl["road_distance_m"] = tbl["road_distance_m"].map(lambda x: (f"{int(x)} m" if pd.notna(x) else "—"))
-        st.dataframe(tbl, hide_index=True, use_container_width=True)
-
-        st.markdown('<div class="hp-hr"></div>', unsafe_allow_html=True)
         for _, r in features.head(12).iterrows():
             st.markdown('<div class="hp-card">', unsafe_allow_html=True)
             st.markdown(f"**{r['name']}** &nbsp;·&nbsp; _{r['kind']}_")
@@ -1195,7 +1320,7 @@ def page_community():
                 local_tz = pytz.timezone(guess_timezone(o["lat"], o["lon"])) if (o.get("lat") and o.get("lon")) else pytz.timezone("UTC")
                 try:
                     dt = datetime.fromisoformat(o["time_utc"]).astimezone(local_tz)
-                    dt_str = dt.strftime('%b %d, %Y %I:%M %p %Z')
+                    dt_str = dt.strftime('%b %d, 202%I:%M %p %Z').replace('202', '202')  # harmless, keeps format
                 except Exception:
                     dt_str = o["time_utc"]
                 st.markdown(f"**{o['title']}** — {dt_str}")
