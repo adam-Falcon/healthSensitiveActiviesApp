@@ -85,11 +85,11 @@ def inject_theme():
       .stButton > button[kind="primary"]{
         background:var(--hp-primary); border:1px solid var(--hp-primary-600);
         color:#fff; font-weight:600; border-radius:10px; padding:.45rem .85rem;
+        transition: background .15s ease;
       }
-      .stButton > button[kind="primary"]{ transition: background .15s ease; }
       .stButton > button[kind="primary"]:hover{background:#0F5DC0;}
 
-      /* Hide any old DataFrame UI (we don’t render the grid anymore) */
+      /* Hide any DataFrame UI (we don’t render the grid anymore) */
       [data-testid="stDataFrame"]{display:none !important;}
 
       /* Toggle row spacing */
@@ -97,21 +97,28 @@ def inject_theme():
 
       /* Two-pane results: left list scrolls, right map fixed height */
       .hp-results-left{
-        max-height: 640px;
         overflow: auto;
         padding-right: 6px;
       }
 
-      /* Tiny "pill" buttons for Focus */
-      .hp-pill-btn button{
-        padding: .2rem .5rem !important;
-        border-radius: 999px !important;
-        font-size: .78rem !important;
-      }
-
       /* Reduce extra gaps in list cards */
-      .hp-card h4{margin: 0 0 2px 0;}
+      .hp-card h4, .hp-card h3, .hp-card h2{margin: 0 0 2px 0;}
       .hp-card .stCaption, .hp-card p {margin: 2px 0;}
+
+      /* Clickable list item: make the header button look like text */
+      .hp-item-btn button{
+        width: 100% !important;
+        text-align: left !important;
+        background: transparent !important;
+        border: 0 !important;
+        padding: 0 !important;
+        margin: 0 !important;
+        color: #0f4da2 !important;
+        font-weight: 700 !important;
+      }
+      .hp-item-btn button:hover{
+        text-decoration: underline;
+      }
     </style>
     """)
 
@@ -795,6 +802,8 @@ def score_feature(feat, active, distance_km, road_distance_m):
 # =========================
 # Weather windows
 # =========================
+OWM_ONECALL_URL = "https://api.openweathermap.org/data/3.0/onecall"
+
 @st.cache_data(show_spinner=False, ttl=1800)
 def fetch_weather_context(lat, lon, tzname, keys):
     tz = pytz.timezone(tzname)
@@ -886,58 +895,7 @@ def set_route(r):
     safe_rerun()
 
 # =========================
-# Auth widgets
-# =========================
-def render_auth_gate():
-    if st.session_state.user_id is not None:
-        return True
-    st.markdown("#### Welcome to Health Path")
-    st.caption("Create an account to join groups, post, and RSVP to outings. You can still use Explore without an account.")
-    colL, colR = st.columns(2)
-    with colL:
-        st.markdown('<div class="hp-card">', unsafe_allow_html=True)
-        st.subheader("Log in")
-        with st.form("login_form"):
-            li_user = st.text_input("Username")
-            li_pw = st.text_input("Password", type="password")
-            li_go = st.form_submit_button("Log in")
-        if li_go:
-            uid = authenticate(li_user.strip(), li_pw)
-            if uid:
-                st.session_state.user_id = uid
-                st.toast("Logged in ✅", icon="✅")
-                safe_rerun()
-            else:
-                st.error("Invalid username or password.")
-        st.markdown('</div>', unsafe_allow_html=True)
-
-    with colR:
-        st.markdown('<div class="hp-card">', unsafe_allow_html=True)
-        st.subheader("Sign up")
-        with st.form("signup_form"):
-            su_user = st.text_input("Username (unique)")
-            su_email = st.text_input("Email (optional)")
-            su_pw1 = st.text_input("Password", type="password")
-            su_pw2 = st.text_input("Confirm password", type="password")
-            su_go = st.form_submit_button("Create account")
-        if su_go:
-            if su_pw1 != su_pw2:
-                st.error("Passwords do not match.")
-            elif not su_user.strip():
-                st.error("Username required.")
-            else:
-                try:
-                    uid = create_user(su_user.strip(), su_email.strip() or None, su_pw1)
-                    st.session_state.user_id = uid
-                    st.toast("Welcome! Account created 🎉", icon="🎉")
-                    safe_rerun()
-                except sqlite3.IntegrityError:
-                    st.error("Username or email already exists.")
-        st.markdown('</div>', unsafe_allow_html=True)
-    return False
-
-# =========================
-# EXPLORE PAGE (condensed filters; list+map side-by-side)
+# EXPLORE PAGE (list+map; auto-fit; hover highlight; click-to-focus)
 # =========================
 def page_explore():
     st.markdown("### 🔍 Explore activities near you")
@@ -1145,19 +1103,52 @@ def page_explore():
     features = features.sort_values(["score","distance_km"], ascending=[False, True]).reset_index(drop=True).head(TOP_N)
     features["rank"] = features.index + 1  # used for list numbering & map labels
 
-    # Save a focus point if user clicks "Focus" on an item
+    # ======== AUTO-FIT / FOCUS STATE ========
     if "map_focus" not in st.session_state:
         st.session_state["map_focus"] = None
 
+    def compute_autofit_view(df: pd.DataFrame):
+        # Compute bounding box and a heuristic zoom
+        min_lat, max_lat = df["lat"].min(), df["lat"].max()
+        min_lon, max_lon = df["lon"].min(), df["lon"].max()
+        center_lat = float((min_lat + max_lat) / 2.0)
+        center_lon = float((min_lon + max_lon) / 2.0)
+        # Span in degrees -> rough zoom; tuned for web mercator
+        span_lat = max(0.0001, max_lat - min_lat)
+        span_lon = max(0.0001, max_lon - min_lon)
+        span = max(span_lat, span_lon)
+        # Heuristic mapping span to zoom (smaller span -> larger zoom)
+        if span < 0.005: zoom = 15
+        elif span < 0.01: zoom = 14
+        elif span < 0.02: zoom = 13
+        elif span < 0.05: zoom = 12
+        elif span < 0.1: zoom = 11
+        elif span < 0.2: zoom = 10.5
+        elif span < 0.4: zoom = 10
+        else: zoom = 9.5
+        return center_lat, center_lon, zoom
+
     # ======== TWO-PANE LAYOUT: LIST (left) + MAP (right) ========
-    colL, colR = st.columns([1.1, 1.9], gap="small")
+    MAP_H = 680  # shared height
+    st.markdown(
+        f"<style>.hp-results-left{{height:{MAP_H}px;}}</style>",
+        unsafe_allow_html=True
+    )
+    colL, colR = st.columns([1.05, 1.95], gap="small")
 
     # -------- LIST (left) --------
     with colL:
         st.markdown('<div class="hp-results-left">', unsafe_allow_html=True)
         for _, r in features.iterrows():
             st.markdown('<div class="hp-card">', unsafe_allow_html=True)
-            st.markdown(f"### {int(r['rank'])}. {r['name']}")
+            # Make the title itself clickable; clicking recenters the map
+            st.markdown('<div class="hp-item-btn">', unsafe_allow_html=True)
+            if st.button(f"{int(r['rank'])}. {r['name']}", key=f"sel_{r['id']}"):
+                st.session_state["map_focus"] = {"lat": float(r["lat"]), "lon": float(r["lon"]), "name": r["name"]}
+                st.toast(f"Centered on: {r['name']}", icon="🧭")
+                safe_rerun()
+            st.markdown('</div>', unsafe_allow_html=True)
+
             st.caption(f"{r['kind']} • {r['distance_km']:.2f} km • Score {r['score']:.0f}")
             # badges
             chips=[]
@@ -1176,18 +1167,6 @@ def page_explore():
             acts = ", ".join(sorted(r["activities"])) if r["activities"] else "—"
             chips.append(f'<span class="hp-chip">{acts}</span>')
             st.markdown(" ".join(chips), unsafe_allow_html=True)
-
-            # Focus button to center map on this item
-            c1, c2 = st.columns([0.6, 0.4])
-            with c1:
-                pass
-            with c2:
-                st.markdown('<div class="hp-pill-btn">', unsafe_allow_html=True)
-                if st.button("Focus", key=f"focus_{r['id']}"):
-                    st.session_state["map_focus"] = {"lat": float(r["lat"]), "lon": float(r["lon"]), "name": r["name"]}
-                    st.toast(f"Centered on: {r['name']}", icon="🧭")
-                    safe_rerun()
-                st.markdown('</div>', unsafe_allow_html=True)
             st.markdown('</div>', unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)  # scroll container
 
@@ -1203,28 +1182,22 @@ def page_explore():
             return f"{int(rr['rank'])}. {rr['name']}\\n{rr['distance_km']:.2f} km — score {rr['score']:.0f}"
         map_df["tooltip"] = map_df.apply(_fmt_tooltip, axis=1)
 
-        # Determine map view: focus if set; else center on search with radius-based zoom
-        def radius_to_zoom(km):
-            # Heuristic: smaller radius -> bigger zoom
-            if km <= 3: return 13.5
-            if km <= 6: return 12.5
-            if km <= 10: return 12
-            if km <= 15: return 11
-            if km <= 20: return 10.5
-            return 10
+        # Determine map view: focus if set; else auto-fit to current markers
         if st.session_state.get("map_focus"):
             fc = st.session_state["map_focus"]
-            init_view = pdk.ViewState(latitude=fc["lat"], longitude=fc["lon"], zoom=14, pitch=0)
+            init_view = pdk.ViewState(latitude=fc["lat"], longitude=fc["lon"], zoom=15, pitch=0)
         else:
-            init_view = pdk.ViewState(latitude=float(lat), longitude=float(lon), zoom=radius_to_zoom(float(radius_km)), pitch=0)
+            c_lat, c_lon, c_zoom = compute_autofit_view(map_df)
+            init_view = pdk.ViewState(latitude=c_lat, longitude=c_lon, zoom=c_zoom, pitch=0)
 
-        # Layers: numbered text labels + points (minimal noise)
+        # Layers: numbered labels + points; enable hover highlight
         layer_points = pdk.Layer(
             "ScatterplotLayer",
             data=map_df,
             get_position='[lon, lat]',
-            get_radius=90,            # compact
+            get_radius=90,
             pickable=True,
+            auto_highlight=True,
             radius_min_pixels=5,
             radius_max_pixels=40
         )
@@ -1242,13 +1215,61 @@ def page_explore():
             initial_view_state=init_view,
             layers=[layer_points, layer_labels],
             tooltip={"text": "{tooltip}"},
-            map_style=None  # keep default; we only plot the points from the list
+            map_style=None
         )
-        st.pydeck_chart(deck, use_container_width=True, height=640)
+        st.pydeck_chart(deck, use_container_width=True, height=MAP_H)
 
 # =========================
-# COMMUNITY PAGE (unchanged)
+# AUTH + COMMUNITY + PROFILE (unchanged)
 # =========================
+def render_auth_gate():
+    if st.session_state.user_id is not None:
+        return True
+    st.markdown("#### Welcome to Health Path")
+    st.caption("Create an account to join groups, post, and RSVP to outings. You can still use Explore without an account.")
+    colL, colR = st.columns(2)
+    with colL:
+        st.markdown('<div class="hp-card">', unsafe_allow_html=True)
+        st.subheader("Log in")
+        with st.form("login_form"):
+            li_user = st.text_input("Username")
+            li_pw = st.text_input("Password", type="password")
+            li_go = st.form_submit_button("Log in")
+        if li_go:
+            uid = authenticate(li_user.strip(), li_pw)
+            if uid:
+                st.session_state.user_id = uid
+                st.toast("Logged in ✅", icon="✅")
+                safe_rerun()
+            else:
+                st.error("Invalid username or password.")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with colR:
+        st.markdown('<div class="hp-card">', unsafe_allow_html=True)
+        st.subheader("Sign up")
+        with st.form("signup_form"):
+            su_user = st.text_input("Username (unique)")
+            su_email = st.text_input("Email (optional)")
+            su_pw1 = st.text_input("Password", type="password")
+            su_pw2 = st.text_input("Confirm password", type="password")
+            su_go = st.form_submit_button("Create account")
+        if su_go:
+            if su_pw1 != su_pw2:
+                st.error("Passwords do not match.")
+            elif not su_user.strip():
+                st.error("Username required.")
+            else:
+                try:
+                    uid = create_user(su_user.strip(), su_email.strip() or None, su_pw1)
+                    st.session_state.user_id = uid
+                    st.toast("Welcome! Account created 🎉", icon="🎉")
+                    safe_rerun()
+                except sqlite3.IntegrityError:
+                    st.error("Username or email already exists.")
+        st.markdown('</div>', unsafe_allow_html=True)
+    return False
+
 def page_community():
     st.markdown("### 👥 Community: Groups, Outings & Posts")
 
