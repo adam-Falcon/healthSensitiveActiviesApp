@@ -1576,3 +1576,4 @@ else:
 # =========================
 st.markdown("---")
 st.write("Data © OpenStreetMap contributors. Weather via OpenWeatherMap (if key provided). Profiles/groups/outings stored locally in SQLite (`data.db`). Be respectful and safe when meeting others.")
+
