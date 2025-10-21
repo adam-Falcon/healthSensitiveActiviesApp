@@ -93,7 +93,9 @@ def inject_theme():
         color:#fff; font-weight:600; border-radius:10px; padding:.45rem .85rem;
         transition: background .15s ease;
       }
-      .stButton > button[kind="primary"]:hover{background:#0F5DC0;}
+      .stButton > button[kind="primary"]:hover{
+        background:#0F5DC0;
+      }
 
       /* Toggle row spacing */
       .hp-toggle-row label{margin-right:14px;}
@@ -126,6 +128,7 @@ def inject_theme():
       details > summary { padding: 2px 0 !important; }
     </style>
     """, unsafe_allow_html=True)
+
 
 def render_brand_header(active_route: str):
     try:
