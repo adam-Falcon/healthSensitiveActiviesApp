@@ -1389,7 +1389,7 @@ def page_community():
                         if st.button("I'm going", key=f"go_{o['id']}"):
                             rsvp(o["id"], me["id"], "going"); st.toast("RSVP saved", icon="✅"); safe_rerun()
                     with b2:
-                        if st.button("Maybe", key=f"maybe_{o['id']}"]:
+                        if st.button("Maybe", key=f"maybe_{o['id']}"):
                             rsvp(o["id"], me["id"], "maybe"); st.toast("RSVP saved", icon="✅"); safe_rerun()
                     with b3:
                         if st.button("Not going", key=f"ng_{o['id']}"):
