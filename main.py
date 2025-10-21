@@ -84,6 +84,7 @@ def inject_theme():
         background:var(--hp-primary); border:1px solid var(--hp-primary-600);
         color:#fff; font-weight:600; border-radius:10px; padding:.5rem .9rem;
       }
+      .stButton > button[kind="primary"]{ transition: background .15s ease; }
       .stButton > button[kind="primary"]:hover{background:#0F5DC0;}
 
       /* DataFrame polish */
@@ -153,7 +154,7 @@ if "route" not in st.session_state:
     st.session_state["route"] = "explore"
 render_brand_header(st.session_state.get("route","explore"))
 
-# Add small CSS for tri-state chips (new)
+# Add small CSS for tri-state chips
 st.html("""
 <style>
   .hp-chip-yes { background:#E8FFF1; color:#0F5132; border-color:#CFF4D2; }
@@ -282,6 +283,15 @@ def init_db():
       FOREIGN KEY(post_id) REFERENCES posts(id),
       FOREIGN KEY(user_id) REFERENCES users(id)
     );
+    /* NEW: per-user Explore presets */
+    CREATE TABLE IF NOT EXISTS presets(
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      payload TEXT NOT NULL,  -- JSON: act_filters, toggles, sensitivities, radius
+      created_at TEXT NOT NULL,
+      FOREIGN KEY(user_id) REFERENCES users(id)
+    );
     """)
     conn.commit()
     conn.close()
@@ -321,6 +331,40 @@ def update_profile(uid, bio, sensitivities, activities):
                 (bio, json.dumps(sensitivities), json.dumps(activities), uid))
     conn.commit(); conn.close()
 
+# ---- NEW: Presets CRUD ----
+def create_preset(user_id: int, name: str, payload: dict):
+    conn = db(); cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO presets (user_id, name, payload, created_at) VALUES (?,?,?,?)",
+        (user_id, name.strip()[:120], json.dumps(payload), now_iso())
+    )
+    conn.commit()
+    pid = cur.lastrowid
+    conn.close()
+    return pid
+
+def list_presets(user_id: int):
+    conn = db(); cur = conn.cursor()
+    cur.execute("SELECT id, name, payload, created_at FROM presets WHERE user_id=? ORDER BY created_at DESC", (user_id,))
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return rows
+
+def get_preset(preset_id: int, user_id: int):
+    conn = db(); cur = conn.cursor()
+    cur.execute("SELECT id, name, payload FROM presets WHERE id=? AND user_id=?", (preset_id, user_id))
+    row = cur.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+def delete_preset(preset_id: int, user_id: int) -> bool:
+    conn = db(); cur = conn.cursor()
+    cur.execute("DELETE FROM presets WHERE id=? AND user_id=?", (preset_id, user_id))
+    ok = cur.rowcount > 0
+    conn.commit(); conn.close()
+    return ok
+
+# ---- Groups / Community ----
 def create_group(name, description, city, tags, owner_id, visibility="public"):
     conn = db(); cur = conn.cursor()
     cur.execute(
@@ -890,7 +934,7 @@ def render_auth_gate():
     return False
 
 # =========================
-# EXPLORE PAGE (UPDATED)
+# EXPLORE PAGE (with tri-state + presets)
 # =========================
 def page_explore():
     st.markdown("### 🔍 Explore activities near you")
@@ -903,21 +947,28 @@ def page_explore():
         except Exception: default_sens = []
         try: default_inc = set(json.loads(me.get("activities") or "[]"))
         except Exception: default_inc = set()
+    else:
+        me = None
 
+    # = Inputs
     col1, col2, col3 = st.columns([3, 1.4, 2.8])
     with col1:
         address = st.text_input("City / address / ZIP", value="Portland, ME",
                                 label_visibility="collapsed",
                                 placeholder="e.g., 02139 or 'Portland, ME'")
     with col2:
-        radius_km = st.slider("Radius (km)", 2, 30, 10, 1, label_visibility="collapsed")
+        # keep radius in session to save/restore via presets
+        if "radius_km" not in st.session_state: st.session_state["radius_km"] = 10
+        st.session_state["radius_km"] = st.slider("Radius (km)", 2, 30, int(st.session_state["radius_km"]), 1, label_visibility="collapsed")
+        radius_km = st.session_state["radius_km"]
     with col3:
         sensitivities = st.multiselect(
             "Sensitivities (choose any)",
             ["UV sensitivity","Pollen sensitivity","Breathing sensitivity","Smog sensitivity",
              "Low impact","Noise sensitivity","Privacy","Accessibility"],
-            default=default_sens or ["UV sensitivity","Pollen sensitivity"]
+            default=st.session_state.get("sens_pick", default_sens or ["UV sensitivity","Pollen sensitivity"])
         )
+        st.session_state["sens_pick"] = sensitivities
 
     # ---- Activity tri-state control & quick toggles ----
     TRI_STATES = {0: "neutral", 1: "include", -1: "exclude"}
@@ -964,11 +1015,11 @@ def page_explore():
     _ensure_tri_state()
 
     with st.expander("Activities filter (Include / Exclude / Neutral)", expanded=False):
+        # Presets (static library)
         c_top_l, c_top_r = st.columns([2, 1])
-
         with c_top_l:
-            preset = st.selectbox("Apply a preset", list(ACTIVITY_PRESETS.keys()), index=0)
-            if preset != "—" and st.button("Apply preset"):
+            preset = st.selectbox("Apply a preset", list(ACTIVITY_PRESETS.keys()), index=0, key="lib_preset")
+            if preset != "—" and st.button("Apply preset", key="btn_apply_ref"):
                 for k, v in ACTIVITY_PRESETS[preset].items():
                     if k in st.session_state["act_filters"]:
                         st.session_state["act_filters"][k] = v
@@ -1016,6 +1067,61 @@ def page_explore():
         with q4:
             q_away = st.checkbox("Away from traffic", key="q_away")
             q_near = st.checkbox("Near traffic ok", key="q_near")
+
+    # ---- NEW: Per-user saved presets UI ----
+    if me:
+        with st.expander("⭐ My saved presets", expanded=False):
+            colS, colA = st.columns([2, 2])
+            with colS:
+                preset_name = st.text_input("Preset name", key="save_preset_name", placeholder="e.g., 'Indoor morning walk'")
+                if st.button("Save current filters as preset", key="btn_save_preset"):
+                    if not preset_name.strip():
+                        st.error("Please give your preset a name.")
+                    else:
+                        payload = {
+                            "act_filters": st.session_state["act_filters"],
+                            "toggles": {
+                                "q_indoor": q_indoor, "q_shaded": q_shaded,
+                                "q_waterfront": q_waterfront, "q_paved": q_paved,
+                                "q_wheel": q_wheel, "q_free": q_free,
+                                "q_away": q_away, "q_near": q_near
+                            },
+                            "sensitivities": st.session_state.get("sens_pick", []),
+                            "radius_km": st.session_state.get("radius_km", 10)
+                        }
+                        create_preset(me["id"], preset_name.strip(), payload)
+                        st.toast("Preset saved ⭐", icon="⭐")
+                        safe_rerun()
+            with colA:
+                user_presets = list_presets(me["id"])
+                if not user_presets:
+                    st.caption("No saved presets yet.")
+                else:
+                    # List + apply/delete
+                    for p in user_presets[:20]:
+                        payload = json.loads(p["payload"])
+                        c1, c2, c3 = st.columns([0.5, 1.2, 0.6])
+                        with c1:
+                            if st.button("Apply", key=f"apply_{p['id']}"):
+                                # restore tri-state
+                                if "act_filters" in payload:
+                                    st.session_state["act_filters"] = {k: int(v) for k, v in payload["act_filters"].items()}
+                                # restore toggles
+                                for k, v in payload.get("toggles", {}).items():
+                                    st.session_state[k] = bool(v)
+                                # restore sensitivities + radius
+                                st.session_state["sens_pick"] = payload.get("sensitivities", [])
+                                st.session_state["radius_km"] = int(payload.get("radius_km", 10))
+                                st.toast(f"Applied preset: {p['name']}", icon="✅")
+                                safe_rerun()
+                        with c2:
+                            st.markdown(f"**{p['name']}**")
+                            st.caption(p["created_at"])
+                        with c3:
+                            if st.button("Delete", key=f"del_{p['id']}"):
+                                if delete_preset(p["id"], me["id"]):
+                                    st.toast("Preset deleted", icon="🗑️")
+                                    safe_rerun()
 
     go = st.button("Search", type="primary")
     if not go:
@@ -1081,27 +1187,27 @@ def page_explore():
         features = features[features["activities"].apply(lambda s: tri_filter(s, st.session_state["act_filters"]))].copy()
 
         # Quick attribute toggles (strict)
-        if q_indoor:
+        if st.session_state.get("q_indoor"):
             features = features[features["indoor"] == True]
-        if q_waterfront:
+        if st.session_state.get("q_waterfront"):
             features = features[features["waterfront"] == True]
-        if q_wheel:
+        if st.session_state.get("q_wheel"):
             features = features[features["wheelchair"] == True]
-        if q_free:
+        if st.session_state.get("q_free"):
             features = features[features["is_free"] == True]
 
         # Traffic distance preference
-        if q_away:
+        if st.session_state.get("q_away"):
             features = features[features["road_distance_m"].fillna(1e9) > 350]
-        elif q_near:
+        elif st.session_state.get("q_near"):
             features = features[features["road_distance_m"].fillna(0) < 120]
 
         # Soft preferences → bump score
         def _soft_pref_bump(row):
             bump = 0
-            if q_shaded and row.get("shaded_possible"):
+            if st.session_state.get("q_shaded") and row.get("shaded_possible"):
                 bump += 3
-            if q_paved and row.get("paved"):
+            if st.session_state.get("q_paved") and row.get("paved"):
                 bump += 3
             return row["score"] + bump
 
@@ -1115,14 +1221,14 @@ def page_explore():
         # Filter summary
         summary_bits = [f"**{k}**: {('Include' if v==1 else 'Exclude')}"
                         for k, v in st.session_state["act_filters"].items() if v != 0]
-        if q_indoor: summary_bits.append("Indoor only")
-        if q_waterfront: summary_bits.append("Waterfront only")
-        if q_wheel: summary_bits.append("Wheelchair yes only")
-        if q_free: summary_bits.append("Free only")
-        if q_away: summary_bits.append("Away from traffic")
-        elif q_near: summary_bits.append("Near traffic ok")
-        if q_shaded: summary_bits.append("Prefer shaded")
-        if q_paved: summary_bits.append("Paved preferred")
+        if st.session_state.get("q_indoor"): summary_bits.append("Indoor only")
+        if st.session_state.get("q_waterfront"): summary_bits.append("Waterfront only")
+        if st.session_state.get("q_wheel"): summary_bits.append("Wheelchair yes only")
+        if st.session_state.get("q_free"): summary_bits.append("Free only")
+        if st.session_state.get("q_away"): summary_bits.append("Away from traffic")
+        elif st.session_state.get("q_near"): summary_bits.append("Near traffic ok")
+        if st.session_state.get("q_shaded"): summary_bits.append("Prefer shaded")
+        if st.session_state.get("q_paved"): summary_bits.append("Paved preferred")
         if summary_bits:
             st.markdown("Filter summary: " + " · ".join(summary_bits))
 
@@ -1203,7 +1309,7 @@ def page_community():
     q = st.text_input("Search by city (preferred) or name", value="")
     all_groups = list_groups(q)
 
-    memberships = {g["id"]: g for g in my_groups(me["id"])}
+    memberships = {g["id"]: g for g in my_groups(me["id"]) }
     my_cards = [g for g in all_groups if g["id"] in memberships]
     other_cards = [g for g in all_groups if g["id"] not in memberships]
 
@@ -1292,7 +1398,6 @@ def page_community():
             st.session_state["view_group_id"] = gid
             safe_rerun()
 
-    # Group detail page
     gid_view = st.session_state.get("view_group_id")
     if not gid_view:
         return
@@ -1320,7 +1425,7 @@ def page_community():
                 local_tz = pytz.timezone(guess_timezone(o["lat"], o["lon"])) if (o.get("lat") and o.get("lon")) else pytz.timezone("UTC")
                 try:
                     dt = datetime.fromisoformat(o["time_utc"]).astimezone(local_tz)
-                    dt_str = dt.strftime('%b %d, 202%I:%M %p %Z').replace('202', '202')  # harmless, keeps format
+                    dt_str = dt.strftime('%b %d, %Y %I:%M %p %Z')
                 except Exception:
                     dt_str = o["time_utc"]
                 st.markdown(f"**{o['title']}** — {dt_str}")
