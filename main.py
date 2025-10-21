@@ -64,7 +64,7 @@ def inject_theme():
       /* Header bar */
       .hp-header{
         position:sticky; top:0; z-index:999;
-        margin:-1.2rem -1rem 1rem -1rem;
+        margin:-1.2rem -1rem 0.5rem -1rem;
         padding:.6rem 1rem;
         background:linear-gradient(90deg,var(--hp-teal) 0%, var(--hp-primary) 100%);
         box-shadow:0 3px 18px rgba(0,0,0,.12);
@@ -75,26 +75,25 @@ def inject_theme():
       .hp-title h1{font-family:"Nunito",Inter,sans-serif;font-weight:800;font-size:22px;line-height:1.1;color:#fff;margin:0;}
       .hp-title small{color:#ECFEFF;opacity:.92;font-weight:500;}
 
-      /* Card + minor tweaks */
-      .hp-card{background:var(--hp-card);border:1px solid #e5e7eb;border-radius:14px;padding:14px 14px 12px;box-shadow:0 8px 24px rgba(2,8,23,.06);margin-bottom:12px;}
-      .hp-chip{display:inline-block;background:#EEF6FF;color:#11407F;border:1px solid #DCEBFF;padding:.15rem .5rem;border-radius:999px;font-size:.8rem;margin-right:.25rem;margin-bottom:.25rem;}
+      /* Card + compact spacing */
+      .hp-card{background:var(--hp-card);border:1px solid #e5e7eb;border-radius:14px;padding:10px 12px;box-shadow:0 8px 24px rgba(2,8,23,.06);margin-bottom:10px;}
+      .hp-compact .stMarkdown, .hp-compact [data-baseweb="select"]{margin-top: 0 !important;}
+      .hp-compact .stMultiSelect, .hp-compact .stSelectbox, .hp-compact .stSlider, .hp-compact .stButton{margin-top: 0 !important;}
+      .hp-chip{display:inline-block;background:#EEF6FF;color:#11407F;border:1px solid #DCEBFF;padding:.15rem .45rem;border-radius:999px;font-size:.78rem;margin-right:.25rem;margin-bottom:.25rem;}
 
       /* Buttons */
       .stButton > button[kind="primary"]{
         background:var(--hp-primary); border:1px solid var(--hp-primary-600);
-        color:#fff; font-weight:600; border-radius:10px; padding:.5rem .9rem;
+        color:#fff; font-weight:600; border-radius:10px; padding:.45rem .85rem;
       }
       .stButton > button[kind="primary"]{ transition: background .15s ease; }
       .stButton > button[kind="primary"]:hover{background:#0F5DC0;}
 
-      /* DataFrame polish */
-      [data-testid="stDataFrame"]{border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;}
-      [data-testid="stDataFrame"] .row_heading,[data-testid="stDataFrame"] .blank{display:none;}
+      /* Hide DataFrame chrome if any remain (we removed the grid) */
+      [data-testid="stDataFrame"]{display:none !important;}
 
-      /* Compact controls */
-      div[data-testid="column"] > div:has(input),
-      div[data-testid="column"] > div:has(button),
-      div[data-testid="column"] > div:has(div[role="slider"]) { margin-top: 0 !important; }
+      /* Compact columns of checkboxes into a single row */
+      .hp-toggle-row label{margin-right:14px;}
     </style>
     """)
 
@@ -153,15 +152,6 @@ inject_theme()
 if "route" not in st.session_state:
     st.session_state["route"] = "explore"
 render_brand_header(st.session_state.get("route","explore"))
-
-# Add small CSS for tri-state chips
-st.html("""
-<style>
-  .hp-chip-yes { background:#E8FFF1; color:#0F5132; border-color:#CFF4D2; }
-  .hp-chip-no  { background:#FFF1F1; color:#842029; border-color:#F5C2C7; }
-  .hp-chip-ghost { background:#fff; color:#11407F; border-color:#DCEBFF; }
-</style>
-""")
 
 # =========================
 # HTTP session (polite)
@@ -283,12 +273,12 @@ def init_db():
       FOREIGN KEY(post_id) REFERENCES posts(id),
       FOREIGN KEY(user_id) REFERENCES users(id)
     );
-    /* NEW: per-user Explore presets */
+    /* Per-user Explore presets (now include/exclude lists + toggles) */
     CREATE TABLE IF NOT EXISTS presets(
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER NOT NULL,
       name TEXT NOT NULL,
-      payload TEXT NOT NULL,  -- JSON: act_filters, toggles, sensitivities, radius
+      payload TEXT NOT NULL,  -- JSON: include, exclude, toggles, sensitivities, radius
       created_at TEXT NOT NULL,
       FOREIGN KEY(user_id) REFERENCES users(id)
     );
@@ -331,7 +321,7 @@ def update_profile(uid, bio, sensitivities, activities):
                 (bio, json.dumps(sensitivities), json.dumps(activities), uid))
     conn.commit(); conn.close()
 
-# ---- NEW: Presets CRUD ----
+# ---- Presets CRUD ----
 def create_preset(user_id: int, name: str, payload: dict):
     conn = db(); cur = conn.cursor()
     cur.execute(
@@ -534,6 +524,8 @@ def haversine_km(lat1, lon1, lat2, lon2):
     R = 6371.0
     phi1, phi2 = math.radians(lat1), math.radians(lat2)
     dphi = math.radians(lat2 - lat1)
+    dlambda = math.radians(lon2 - lon2 + (lon2 - lon1))  # consistent, but we’ll fix below
+    # Correct dlambda:
     dlambda = math.radians(lon2 - lon1)
     a = (math.sin(dphi/2)**2 + math.cos(phi1)*math.cos(phi2)*math.sin(dlambda/2)**2)
     return 2 * R * math.asin(math.sqrt(a))
@@ -934,7 +926,7 @@ def render_auth_gate():
     return False
 
 # =========================
-# EXPLORE PAGE (with tri-state + presets)
+# EXPLORE PAGE (condensed UI, single-page flow, list-only results)
 # =========================
 def page_explore():
     st.markdown("### 🔍 Explore activities near you")
@@ -950,184 +942,123 @@ def page_explore():
     else:
         me = None
 
-    # = Inputs
-    col1, col2, col3 = st.columns([3, 1.4, 2.8])
-    with col1:
-        address = st.text_input("City / address / ZIP", value="Portland, ME",
-                                label_visibility="collapsed",
-                                placeholder="e.g., 02139 or 'Portland, ME'")
-    with col2:
-        # keep radius in session to save/restore via presets
-        if "radius_km" not in st.session_state: st.session_state["radius_km"] = 10
-        st.session_state["radius_km"] = st.slider("Radius (km)", 2, 30, int(st.session_state["radius_km"]), 1, label_visibility="collapsed")
-        radius_km = st.session_state["radius_km"]
-    with col3:
+    # ======== COMPACT FILTER BAR ========
+    st.markdown('<div class="hp-card hp-compact">', unsafe_allow_html=True)
+    c1, c2, c3 = st.columns([4, 1.5, 1])
+    with c1:
+        address = st.text_input("Where?", value="Portland, ME",
+                                placeholder="City / address / ZIP")
+    with c2:
+        if "radius_km" not in st.session_state:
+            st.session_state["radius_km"] = 10
+        radius_km = st.slider("Radius (km)", 2, 30, int(st.session_state["radius_km"]), 1)
+        st.session_state["radius_km"] = radius_km
+    with c3:
+        go = st.button("Search", type="primary", use_container_width=True)
+
+    # Sensitivities + Include/Exclude in one compact row
+    s_row1, s_row2 = st.columns([2.2, 2.8])
+    with s_row1:
         sensitivities = st.multiselect(
-            "Sensitivities (choose any)",
+            "Sensitivities",
             ["UV sensitivity","Pollen sensitivity","Breathing sensitivity","Smog sensitivity",
              "Low impact","Noise sensitivity","Privacy","Accessibility"],
             default=st.session_state.get("sens_pick", default_sens or ["UV sensitivity","Pollen sensitivity"])
         )
         st.session_state["sens_pick"] = sensitivities
+    with s_row2:
+        ALL_ACTIVITIES = [
+            "Walking","Hiking","Running","Cycling","Swimming","Museums",
+            "Botanical gardens","Farms","Beaches","Playgrounds","Fitness stations",
+            "Community events","Ice skating","Sports fields","Parks","Community centers",
+            "Tracks","Greenways","Free","Paid"
+        ]
+        # Preselect user favorites into Include
+        include_default = sorted(default_inc) if default_inc else []
+        include_set = set(st.multiselect("Include activities (any match)", ALL_ACTIVITIES, default=include_default, key="inc_ms"))
+        exclude_set = set(st.multiselect("Exclude activities", ALL_ACTIVITIES, default=[], key="exc_ms"))
 
-    # ---- Activity tri-state control & quick toggles ----
-    TRI_STATES = {0: "neutral", 1: "include", -1: "exclude"}
-    TRI_ICONS = {0: "⭕", 1: "✅", -1: "🚫"}
+    # Quick attribute toggles — single compact row
+    st.markdown('<div class="hp-toggle-row">', unsafe_allow_html=True)
+    tl1, tl2, tl3, tl4, tl5, tl6, tl7, tl8 = st.columns(8)
+    with tl1: q_indoor = st.checkbox("Indoor", key="q_indoor")
+    with tl2: q_shaded = st.checkbox("Shaded", key="q_shaded")
+    with tl3: q_waterfront = st.checkbox("Waterfront", key="q_waterfront")
+    with tl4: q_paved = st.checkbox("Paved", key="q_paved")
+    with tl5: q_wheel = st.checkbox("Wheelchair", key="q_wheel")
+    with tl6: q_free = st.checkbox("Free", key="q_free")
+    # Mutually exclusive: Away vs Near
+    with tl7:
+        q_away = st.checkbox("Away from traffic", key="q_away")
+        if q_away and st.session_state.get("q_near"):
+            st.session_state["q_near"] = False
+    with tl8:
+        q_near = st.checkbox("Near traffic ok", key="q_near")
+        if q_near and st.session_state.get("q_away"):
+            st.session_state["q_away"] = False
+    st.markdown('</div>', unsafe_allow_html=True)
 
-    ALL_ACTIVITIES = [
-        "Walking","Hiking","Running","Cycling","Swimming","Museums",
-        "Botanical gardens","Farms","Beaches","Playgrounds","Fitness stations",
-        "Community events","Ice skating","Sports fields","Parks","Community centers",
-        "Tracks","Greenways","Free","Paid"
-    ]
-
-    ACTIVITY_PRESETS = {
-        "—": {},
-        "Gentle & Low-Impact": {"Walking": 1, "Parks": 1, "Tracks": 1, "Swimming": 1, "Sports fields": -1, "Playgrounds": -1},
-        "All Outdoors": {"Museums": -1, "Community centers": -1, "Swimming": -1},
-        "Indoor & Low-Pollen": {"Museums": 1, "Community centers": 1, "Swimming": 1, "Botanical gardens": -1, "Parks": -1, "Beaches": -1},
-    }
-
-    def _ensure_tri_state():
-        # initialize with user favorites as "include"
-        if "act_filters" not in st.session_state:
-            st.session_state["act_filters"] = {a: (1 if a in default_inc else 0) for a in ALL_ACTIVITIES}
-
-    def _cycle(v: int) -> int:
-        return {0: 1, 1: -1, -1: 0}[v]
-
-    def _state_badge(v: int) -> str:
-        if v == 1:  # include
-            return "hp-chip hp-chip-yes"
-        if v == -1: # exclude
-            return "hp-chip hp-chip-no"
-        return "hp-chip"
-
-    def tri_filter(activity_set: set[str], tri_map: dict[str, int]) -> bool:
-        inc = {k for k, v in tri_map.items() if v == 1}
-        exc = {k for k, v in tri_map.items() if v == -1}
-        if exc and (activity_set & exc):
-            return False
-        if inc and not (activity_set & inc):
-            return False
-        return True
-
-    _ensure_tri_state()
-
-    with st.expander("Activities filter (Include / Exclude / Neutral)", expanded=False):
-        # Presets (static library)
-        c_top_l, c_top_r = st.columns([2, 1])
-        with c_top_l:
-            preset = st.selectbox("Apply a preset", list(ACTIVITY_PRESETS.keys()), index=0, key="lib_preset")
-            if preset != "—" and st.button("Apply preset", key="btn_apply_ref"):
-                for k, v in ACTIVITY_PRESETS[preset].items():
-                    if k in st.session_state["act_filters"]:
-                        st.session_state["act_filters"][k] = v
-                st.toast("Preset applied", icon="✨")
-
-        with c_top_r:
-            c1, c2 = st.columns(2)
-            with c1:
-                if st.button("Select all (include)"):
-                    for k in st.session_state["act_filters"]:
-                        st.session_state["act_filters"][k] = 1
-            with c2:
-                if st.button("Clear all (neutral)"):
-                    for k in st.session_state["act_filters"]:
-                        st.session_state["act_filters"][k] = 0
-
-        st.caption("Click chips to cycle: ⭕ Neutral → ✅ Include → 🚫 Exclude")
-
-        chip_cols = st.columns(3)
-        for i, act in enumerate(ALL_ACTIVITIES):
-            col = chip_cols[i % 3]
-            with col:
-                state = st.session_state["act_filters"][act]
-                btn = st.button(f"{TRI_ICONS[state]} {act}", key=f"tri_{act}")
-                if btn:
-                    st.session_state["act_filters"][act] = _cycle(state)
-                st.markdown(
-                    f'<span class="{_state_badge(st.session_state["act_filters"][act])}">'
-                    f'{TRI_STATES[st.session_state["act_filters"][act]].title()}</span>',
-                    unsafe_allow_html=True
-                )
-
-    # Quick attribute toggles (map to classified features)
-    with st.expander("Quick attribute toggles", expanded=False):
-        q1, q2, q3, q4 = st.columns(4)
-        with q1:
-            q_indoor = st.checkbox("Indoor only", key="q_indoor")
-            q_shaded = st.checkbox("Prefer shaded", key="q_shaded")
-        with q2:
-            q_waterfront = st.checkbox("Waterfront only", key="q_waterfront")
-            q_paved = st.checkbox("Paved preferred", key="q_paved")
-        with q3:
-            q_wheel = st.checkbox("Wheelchair yes only", key="q_wheel")
-            q_free = st.checkbox("Free only", key="q_free")
-        with q4:
-            q_away = st.checkbox("Away from traffic", key="q_away")
-            q_near = st.checkbox("Near traffic ok", key="q_near")
-
-    # ---- NEW: Per-user saved presets UI ----
+    # Saved presets (minimal, collapsed)
     if me:
-        with st.expander("⭐ My saved presets", expanded=False):
-            colS, colA = st.columns([2, 2])
-            with colS:
-                preset_name = st.text_input("Preset name", key="save_preset_name", placeholder="e.g., 'Indoor morning walk'")
-                if st.button("Save current filters as preset", key="btn_save_preset"):
+        with st.expander("⭐ Presets", expanded=False):
+            colP1, colP2 = st.columns([1.8, 2.2])
+            with colP1:
+                preset_name = st.text_input("Name", key="save_preset_name", placeholder="e.g., Indoor easy")
+                if st.button("Save", key="btn_save_preset"):
+                    payload = {
+                        "include": sorted(list(include_set)),
+                        "exclude": sorted(list(exclude_set)),
+                        "toggles": {
+                            "q_indoor": q_indoor, "q_shaded": q_shaded, "q_waterfront": q_waterfront,
+                            "q_paved": q_paved, "q_wheel": q_wheel, "q_free": q_free,
+                            "q_away": q_away, "q_near": q_near
+                        },
+                        "sensitivities": sensitivities,
+                        "radius_km": radius_km
+                    }
                     if not preset_name.strip():
-                        st.error("Please give your preset a name.")
+                        st.error("Please name your preset.")
                     else:
-                        payload = {
-                            "act_filters": st.session_state["act_filters"],
-                            "toggles": {
-                                "q_indoor": q_indoor, "q_shaded": q_shaded,
-                                "q_waterfront": q_waterfront, "q_paved": q_paved,
-                                "q_wheel": q_wheel, "q_free": q_free,
-                                "q_away": q_away, "q_near": q_near
-                            },
-                            "sensitivities": st.session_state.get("sens_pick", []),
-                            "radius_km": st.session_state.get("radius_km", 10)
-                        }
                         create_preset(me["id"], preset_name.strip(), payload)
                         st.toast("Preset saved ⭐", icon="⭐")
                         safe_rerun()
-            with colA:
+            with colP2:
                 user_presets = list_presets(me["id"])
                 if not user_presets:
-                    st.caption("No saved presets yet.")
+                    st.caption("No presets yet.")
                 else:
-                    # List + apply/delete
-                    for p in user_presets[:20]:
-                        payload = json.loads(p["payload"])
-                        c1, c2, c3 = st.columns([0.5, 1.2, 0.6])
-                        with c1:
+                    for p in user_presets[:25]:
+                        pl = json.loads(p["payload"])
+                        # Backward compatibility for older tri-state payloads
+                        if "act_filters" in pl and "include" not in pl and "exclude" not in pl:
+                            inc = [k for k,v in pl["act_filters"].items() if int(v)==1]
+                            exc = [k for k,v in pl["act_filters"].items() if int(v)==-1]
+                            pl["include"], pl["exclude"] = inc, exc
+                        cA, cB, cC = st.columns([0.5, 1.4, 0.6])
+                        with cA:
                             if st.button("Apply", key=f"apply_{p['id']}"):
-                                # restore tri-state
-                                if "act_filters" in payload:
-                                    st.session_state["act_filters"] = {k: int(v) for k, v in payload["act_filters"].items()}
-                                # restore toggles
-                                for k, v in payload.get("toggles", {}).items():
-                                    st.session_state[k] = bool(v)
-                                # restore sensitivities + radius
-                                st.session_state["sens_pick"] = payload.get("sensitivities", [])
-                                st.session_state["radius_km"] = int(payload.get("radius_km", 10))
+                                st.session_state["inc_ms"] = pl.get("include", [])
+                                st.session_state["exc_ms"] = pl.get("exclude", [])
+                                for k, v in pl.get("toggles", {}).items(): st.session_state[k] = bool(v)
+                                st.session_state["sens_pick"] = pl.get("sensitivities", [])
+                                st.session_state["radius_km"] = int(pl.get("radius_km", radius_km))
                                 st.toast(f"Applied preset: {p['name']}", icon="✅")
                                 safe_rerun()
-                        with c2:
+                        with cB:
                             st.markdown(f"**{p['name']}**")
                             st.caption(p["created_at"])
-                        with c3:
+                        with cC:
                             if st.button("Delete", key=f"del_{p['id']}"):
                                 if delete_preset(p["id"], me["id"]):
-                                    st.toast("Preset deleted", icon="🗑️")
-                                    safe_rerun()
+                                    st.toast("Preset deleted", icon="🗑️"); safe_rerun()
+    st.markdown('</div>', unsafe_allow_html=True)  # end filter card
 
-    go = st.button("Search", type="primary")
+    # No search yet → keep page short
     if not go:
-        st.info("Enter a location, choose sensitivities and activities, then click **Search**.")
+        st.info("Set filters above and click **Search** to see results below.")
         return
 
+    # ======== SEARCH & RESULTS (list only) ========
     if not address.strip():
         st.error("Please enter a city/address/ZIP.")
         return
@@ -1141,151 +1072,122 @@ def page_explore():
     tzname = guess_timezone(lat, lon)
     keys = load_optional_keys()
 
-    colA, colB = st.columns([2,3])
-    with colA:
-        st.markdown('<div class="hp-card">', unsafe_allow_html=True)
+    # Location + suggested times (compact)
+    st.markdown('<div class="hp-card">', unsafe_allow_html=True)
+    l1, l2 = st.columns([2.2, 2.8])
+    with l1:
         st.subheader("Location")
-        st.write(loc["display_name"])
-        st.write(f"Lat/Lon: {lat:.5f}, {lon:.5f}")
-        st.write(f"Timezone: {tzname}")
+        st.caption(loc["display_name"])
+        st.caption(f"Lat/Lon: {lat:.5f}, {lon:.5f} • {tzname}")
+    with l2:
         weather_ctx = fetch_weather_context(lat, lon, tzname, keys)
         windows = build_time_windows(weather_ctx, set(sensitivities))
-        st.markdown("**Suggested times today** (local):")
-        st.write(format_window_str(windows))
+        st.markdown("**Suggested times today (local):** " + format_window_str(windows))
         if weather_ctx.get("notes"):
             with st.expander("Weather notes"):
                 for n in weather_ctx["notes"]:
                     st.write("• " + n)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    st.subheader("Public resources nearby")
+    with st.spinner("Querying OpenStreetMap for places..."):
+        places = fetch_places(lat, lon, radius_km)
+        roads  = fetch_roads(lat, lon, radius_km)
+
+    if places.empty:
+        st.warning("No public activity places found within that radius. Try enlarging the search.")
+        return
+
+    def nearest_road_m(latp, lonp):
+        if roads is None or roads.empty: return None
+        dmins = [haversine_km(latp, lonp, rlat, rlon)*1000 for rlat, rlon in zip(roads["lat"].values, roads["lon"].values)]
+        return min(dmins) if dmins else None
+
+    places["road_distance_m"] = places.apply(lambda r: nearest_road_m(r["lat"], r["lon"]), axis=1)
+
+    active = set(sensitivities)
+    feats = []
+    for _, row in places.iterrows():
+        cls = classify_feature(row)
+        score = score_feature(cls, active, row["distance_km"], row["road_distance_m"])
+        feats.append({**row.to_dict(), **cls, "score": score})
+    features = pd.DataFrame(feats)
+
+    # Apply include/exclude activities
+    def _match_sets(activity_set: set[str], inc: set[str], exc: set[str]) -> bool:
+        if activity_set & exc:
+            return False
+        if inc and not (activity_set & inc):
+            return False
+        return True
+    features = features[features["activities"].apply(lambda s: _match_sets(s, include_set, exclude_set))].copy()
+
+    # Quick attribute filters (strict)
+    if q_indoor:      features = features[features["indoor"] == True]
+    if q_waterfront:  features = features[features["waterfront"] == True]
+    if q_wheel:       features = features[features["wheelchair"] == True]
+    if q_free:        features = features[features["is_free"] == True]
+    if q_away:        features = features[features["road_distance_m"].fillna(1e9) > 350]
+    elif q_near:      features = features[features["road_distance_m"].fillna(0) < 120]
+
+    # Soft bumps
+    def _soft_pref_bump(row):
+        bump = 0
+        if q_shaded and row.get("shaded_possible"): bump += 3
+        if q_paved and row.get("paved"): bump += 3
+        return row["score"] + bump
+    if not features.empty:
+        features["score"] = features.apply(_soft_pref_bump, axis=1)
+
+    if features.empty:
+        st.warning("No places match those filters. Try clearing some toggles.")
+        return
+
+    # Sort and render list (no grid)
+    features = features.sort_values(["score","distance_km"], ascending=[False, True]).reset_index(drop=True)
+
+    def make_badges(r):
+        chips=[]
+        if r["indoor"]: chips.append('<span class="hp-chip">indoor</span>')
+        if r["shaded_possible"]: chips.append('<span class="hp-chip">shaded</span>')
+        if r["waterfront"]: chips.append('<span class="hp-chip">waterfront</span>')
+        if r["paved"]: chips.append('<span class="hp-chip">paved</span>')
+        if r["wheelchair"]: chips.append('<span class="hp-chip">wheelchair</span>')
+        if r["pollen_risk"]=="low": chips.append('<span class="hp-chip">low-pollen</span>')
+        elif r["pollen_risk"]=="higher": chips.append('<span class="hp-chip">higher-pollen</span>')
+        if r.get("is_free") is True: chips.append('<span class="hp-chip">free</span>')
+        if r.get("is_paid") is True: chips.append('<span class="hp-chip">paid</span>')
+        if r.get("road_distance_m") is not None:
+            if r["road_distance_m"] > 350: chips.append('<span class="hp-chip">away from traffic</span>')
+            elif r["road_distance_m"] < 120: chips.append('<span class="hp-chip">near traffic</span>')
+        acts = ", ".join(sorted(r["activities"])) if r["activities"] else "—"
+        chips.append(f'<span class="hp-chip">{acts}</span>')
+        return " ".join(chips)
+
+    for _, r in features.head(30).iterrows():
+        st.markdown('<div class="hp-card">', unsafe_allow_html=True)
+        st.markdown(f"**{r['name']}** &nbsp;·&nbsp; _{r['kind']}_")
+        st.caption(f"{r['distance_km']:.2f} km away  •  Score: {r['score']:.0f}")
+        st.markdown(make_badges(r), unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
-    with colB:
-        st.subheader("Public resources nearby")
-        with st.spinner("Querying OpenStreetMap for places..."):
-            places = fetch_places(lat, lon, radius_km)
-            roads  = fetch_roads(lat, lon, radius_km)
+    # Optional: Map in expander to keep page compact
+    with st.expander("🗺️ Map (optional)"):
+        _safe_cols = ["lat","lon","name","distance_km","score"]
+        map_df = features[_safe_cols].copy()
+        for c in ["lat","lon","distance_km","score"]:
+            map_df[c] = map_df[c].astype(float)
+        def _fmt_tooltip(rr):
+            return f"{rr['name']} — score {rr['score']:.0f}\\n{rr['distance_km']:.2f} km away"
+        map_df["tooltip"] = map_df.apply(_fmt_tooltip, axis=1)
 
-        if places.empty:
-            st.warning("No public activity places found within that radius. Try enlarging the search.")
-            return
-
-        def nearest_road_m(latp, lonp):
-            if roads is None or roads.empty: return None
-            dmins = [haversine_km(latp, lonp, rlat, rlon)*1000 for rlat, rlon in zip(roads["lat"].values, roads["lon"].values)]
-            return min(dmins) if dmins else None
-
-        places["road_distance_m"] = places.apply(lambda r: nearest_road_m(r["lat"], r["lon"]), axis=1)
-
-        active = set(sensitivities)
-        feats = []
-        for _, row in places.iterrows():
-            cls = classify_feature(row)
-            score = score_feature(cls, active, row["distance_km"], row["road_distance_m"])
-            feats.append({**row.to_dict(), **cls, "score": score})
-        features = pd.DataFrame(feats)
-
-        # Tri-state activities filter
-        features = features[features["activities"].apply(lambda s: tri_filter(s, st.session_state["act_filters"]))].copy()
-
-        # Quick attribute toggles (strict)
-        if st.session_state.get("q_indoor"):
-            features = features[features["indoor"] == True]
-        if st.session_state.get("q_waterfront"):
-            features = features[features["waterfront"] == True]
-        if st.session_state.get("q_wheel"):
-            features = features[features["wheelchair"] == True]
-        if st.session_state.get("q_free"):
-            features = features[features["is_free"] == True]
-
-        # Traffic distance preference
-        if st.session_state.get("q_away"):
-            features = features[features["road_distance_m"].fillna(1e9) > 350]
-        elif st.session_state.get("q_near"):
-            features = features[features["road_distance_m"].fillna(0) < 120]
-
-        # Soft preferences → bump score
-        def _soft_pref_bump(row):
-            bump = 0
-            if st.session_state.get("q_shaded") and row.get("shaded_possible"):
-                bump += 3
-            if st.session_state.get("q_paved") and row.get("paved"):
-                bump += 3
-            return row["score"] + bump
-
-        if not features.empty:
-            features["score"] = features.apply(_soft_pref_bump, axis=1)
-
-        if features.empty:
-            st.warning("No places match those filters. Try clearing some toggles or presets.")
-            return
-
-        # Filter summary
-        summary_bits = [f"**{k}**: {('Include' if v==1 else 'Exclude')}"
-                        for k, v in st.session_state["act_filters"].items() if v != 0]
-        if st.session_state.get("q_indoor"): summary_bits.append("Indoor only")
-        if st.session_state.get("q_waterfront"): summary_bits.append("Waterfront only")
-        if st.session_state.get("q_wheel"): summary_bits.append("Wheelchair yes only")
-        if st.session_state.get("q_free"): summary_bits.append("Free only")
-        if st.session_state.get("q_away"): summary_bits.append("Away from traffic")
-        elif st.session_state.get("q_near"): summary_bits.append("Near traffic ok")
-        if st.session_state.get("q_shaded"): summary_bits.append("Prefer shaded")
-        if st.session_state.get("q_paved"): summary_bits.append("Paved preferred")
-        if summary_bits:
-            st.markdown("Filter summary: " + " · ".join(summary_bits))
-
-        # table + cards
-        features = features.sort_values(["score","distance_km"], ascending=[False, True]).reset_index(drop=True)
-        features["activities_list"] = features["activities"].apply(lambda s: ", ".join(sorted(s)) if s else "—")
-
-        tbl = features[["name","kind","activities_list","distance_km","road_distance_m","score"]].copy()
-        tbl["distance_km"] = tbl["distance_km"].map(lambda x: f"{x:.2f} km")
-        tbl["road_distance_m"] = tbl["road_distance_m"].map(lambda x: (f"{int(x)} m" if pd.notna(x) else "—"))
-        st.dataframe(tbl, hide_index=True, use_container_width=True)
-
-        st.markdown('<div class="hp-hr"></div>', unsafe_allow_html=True)
-
-        def make_badges(r):
-            chips=[]
-            if r["indoor"]: chips.append('<span class="hp-chip">indoor</span>')
-            if r["shaded_possible"]: chips.append('<span class="hp-chip">shaded</span>')
-            if r["waterfront"]: chips.append('<span class="hp-chip">waterfront</span>')
-            if r["paved"]: chips.append('<span class="hp-chip">paved</span>')
-            if r["wheelchair"]: chips.append('<span class="hp-chip">wheelchair</span>')
-            if r["pollen_risk"]=="low": chips.append('<span class="hp-chip">low-pollen</span>')
-            elif r["pollen_risk"]=="higher": chips.append('<span class="hp-chip">higher-pollen</span>')
-            if r.get("is_free") is True: chips.append('<span class="hp-chip">free</span>')
-            if r.get("is_paid") is True: chips.append('<span class="hp-chip">paid</span>')
-            if r.get("road_distance_m") is not None:
-                if r["road_distance_m"] > 350: chips.append('<span class="hp-chip">away from traffic</span>')
-                elif r["road_distance_m"] < 120: chips.append('<span class="hp-chip">near traffic</span>')
-            return " ".join(chips)
-
-        for _, r in features.head(12).iterrows():
-            st.markdown('<div class="hp-card">', unsafe_allow_html=True)
-            st.markdown(f"**{r['name']}** &nbsp;·&nbsp; _{r['kind']}_")
-            st.caption(f"{r['distance_km']:.2f} km away  •  Score: {r['score']:.0f}")
-            st.markdown(make_badges(r), unsafe_allow_html=True)
-            st.markdown('</div>', unsafe_allow_html=True)
-
-        csv = features.drop(columns=["tags"]).to_csv(index=False)
-        st.download_button("Download results (CSV)", csv, "activities.csv", "text/csv")
-
-    # Map
-    st.subheader("Map")
-    _safe_cols = ["lat","lon","name","distance_km","score","activities_list"]
-    map_df = features[_safe_cols].copy()
-    for c in ["lat","lon","distance_km","score"]:
-        map_df[c] = map_df[c].astype(float)
-    def _fmt_tooltip(r):
-        return f"{r['name']} — score {r['score']:.0f}\\nActivities: {r['activities_list']}\\n{r['distance_km']:.2f} km away"
-    map_df["tooltip"] = map_df.apply(_fmt_tooltip, axis=1)
-
-    initial_view = pdk.ViewState(latitude=float(lat), longitude=float(lon), zoom=12, pitch=0)
-    layer_points = pdk.Layer("ScatterplotLayer", data=map_df, get_position='[lon, lat]', get_radius=100, pickable=True, radius_min_pixels=6, radius_max_pixels=40)
-    layer_text = pdk.Layer("TextLayer", data=map_df, get_position='[lon, lat]', get_text="name", get_size=12, get_alignment_baseline='"bottom"')
-    circle_data = pd.DataFrame([{"lat": float(lat), "lon": float(lon), "r": float(radius_km) * 1000.0}])
-    layer_center = pdk.Layer("ScatterplotLayer", data=circle_data, get_position='[lon, lat]', get_radius="r", radius_min_pixels=0, radius_max_pixels=2000, stroked=True, filled=False, line_width_min_pixels=1)
-    deck = pdk.Deck(map_style=None, initial_view_state=initial_view, layers=[layer_center, layer_points, layer_text], tooltip={"text": "{tooltip}"})
-    st.pydeck_chart(deck)
+        initial_view = pdk.ViewState(latitude=float(lat), longitude=float(lon), zoom=12, pitch=0)
+        layer_points = pdk.Layer("ScatterplotLayer", data=map_df, get_position='[lon, lat]', get_radius=100, pickable=True, radius_min_pixels=6, radius_max_pixels=40)
+        layer_text = pdk.Layer("TextLayer", data=map_df, get_position='[lon, lat]', get_text="name", get_size=12, get_alignment_baseline='"bottom"')
+        circle_data = pd.DataFrame([{"lat": float(lat), "lon": float(lon), "r": float(radius_km) * 1000.0}])
+        layer_center = pdk.Layer("ScatterplotLayer", data=circle_data, get_position='[lon, lat]', get_radius="r", radius_min_pixels=0, radius_max_pixels=2000, stroked=True, filled=False, line_width_min_pixels=1)
+        deck = pdk.Deck(map_style=None, initial_view_state=initial_view, layers=[layer_center, layer_points, layer_text], tooltip={"text": "{tooltip}"})
+        st.pydeck_chart(deck)
 
 # =========================
 # COMMUNITY PAGE
