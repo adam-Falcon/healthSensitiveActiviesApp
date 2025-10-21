@@ -89,16 +89,33 @@ def inject_theme():
       .stButton > button[kind="primary"]{ transition: background .15s ease; }
       .stButton > button[kind="primary"]:hover{background:#0F5DC0;}
 
-      /* Hide DataFrame chrome if any remain (we removed the grid) */
+      /* Hide any old DataFrame UI (we don’t render the grid anymore) */
       [data-testid="stDataFrame"]{display:none !important;}
 
-      /* Compact columns of checkboxes into a single row */
+      /* Toggle row spacing */
       .hp-toggle-row label{margin-right:14px;}
+
+      /* Two-pane results: left list scrolls, right map fixed height */
+      .hp-results-left{
+        max-height: 640px;
+        overflow: auto;
+        padding-right: 6px;
+      }
+
+      /* Tiny "pill" buttons for Focus */
+      .hp-pill-btn button{
+        padding: .2rem .5rem !important;
+        border-radius: 999px !important;
+        font-size: .78rem !important;
+      }
+
+      /* Reduce extra gaps in list cards */
+      .hp-card h4{margin: 0 0 2px 0;}
+      .hp-card .stCaption, .hp-card p {margin: 2px 0;}
     </style>
     """)
 
 def render_brand_header(active_route: str):
-    # Logo block
     try:
         if os.path.exists(LOGO_PATH):
             logo_html = f'<img src="file://{LOGO_PATH}" alt="{APP_NAME}" style="width:44px;height:auto;display:block;border-radius:8px;" />'
@@ -107,7 +124,6 @@ def render_brand_header(active_route: str):
     except Exception:
         logo_html = '<div style="font-size:28px;line-height:1;">🩺</div>'
 
-    # Top gradient brand bar
     st.html(f"""
       <div class="hp-header">
         <div class="hp-row">
@@ -120,7 +136,6 @@ def render_brand_header(active_route: str):
       </div>
     """)
 
-    # Nav row (Streamlit buttons so clicks change state)
     left, ex_col, cm_col, prof_col = st.columns([0.64, 0.12, 0.12, 0.12])
     with ex_col:
         if st.button("Explore", key="nav_explore"):
@@ -136,7 +151,6 @@ def render_brand_header(active_route: str):
             st.session_state["route"] = "profile"
             st.rerun()
 
-    # Highlight the active one
     active_map = {"explore":"nav_explore","community":"nav_community","profile":"nav_profile"}
     active_key = active_map.get(active_route, "nav_explore")
     st.html(f"""
@@ -147,7 +161,6 @@ def render_brand_header(active_route: str):
       </style>
     """)
 
-# Inject theme & header (order matters)
 inject_theme()
 if "route" not in st.session_state:
     st.session_state["route"] = "explore"
@@ -183,7 +196,7 @@ def safe_rerun():
     except Exception: pass
 
 # =========================
-# DB (SQLite)
+# DB (SQLite) + Presets
 # =========================
 DB_PATH = os.getenv("APP_DB_PATH", "data.db")
 os.makedirs(os.path.dirname(DB_PATH) or ".", exist_ok=True)
@@ -273,12 +286,11 @@ def init_db():
       FOREIGN KEY(post_id) REFERENCES posts(id),
       FOREIGN KEY(user_id) REFERENCES users(id)
     );
-    /* Per-user Explore presets (now include/exclude lists + toggles) */
     CREATE TABLE IF NOT EXISTS presets(
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER NOT NULL,
       name TEXT NOT NULL,
-      payload TEXT NOT NULL,  -- JSON: include, exclude, toggles, sensitivities, radius
+      payload TEXT NOT NULL,
       created_at TEXT NOT NULL,
       FOREIGN KEY(user_id) REFERENCES users(id)
     );
@@ -321,7 +333,6 @@ def update_profile(uid, bio, sensitivities, activities):
                 (bio, json.dumps(sensitivities), json.dumps(activities), uid))
     conn.commit(); conn.close()
 
-# ---- Presets CRUD ----
 def create_preset(user_id: int, name: str, payload: dict):
     conn = db(); cur = conn.cursor()
     cur.execute(
@@ -354,7 +365,9 @@ def delete_preset(preset_id: int, user_id: int) -> bool:
     conn.commit(); conn.close()
     return ok
 
-# ---- Groups / Community ----
+# =========================
+# Groups / Community
+# =========================
 def create_group(name, description, city, tags, owner_id, visibility="public"):
     conn = db(); cur = conn.cursor()
     cur.execute(
@@ -524,8 +537,6 @@ def haversine_km(lat1, lon1, lat2, lon2):
     R = 6371.0
     phi1, phi2 = math.radians(lat1), math.radians(lat2)
     dphi = math.radians(lat2 - lat1)
-    dlambda = math.radians(lon2 - lon2 + (lon2 - lon1))  # consistent, but we’ll fix below
-    # Correct dlambda:
     dlambda = math.radians(lon2 - lon1)
     a = (math.sin(dphi/2)**2 + math.cos(phi1)*math.cos(phi2)*math.sin(dlambda/2)**2)
     return 2 * R * math.asin(math.sqrt(a))
@@ -926,7 +937,7 @@ def render_auth_gate():
     return False
 
 # =========================
-# EXPLORE PAGE (condensed UI, single-page flow, list-only results)
+# EXPLORE PAGE (condensed filters; list+map side-by-side)
 # =========================
 def page_explore():
     st.markdown("### 🔍 Explore activities near you")
@@ -946,8 +957,7 @@ def page_explore():
     st.markdown('<div class="hp-card hp-compact">', unsafe_allow_html=True)
     c1, c2, c3 = st.columns([4, 1.5, 1])
     with c1:
-        address = st.text_input("Where?", value="Portland, ME",
-                                placeholder="City / address / ZIP")
+        address = st.text_input("Where?", value="Portland, ME", placeholder="City / address / ZIP")
     with c2:
         if "radius_km" not in st.session_state:
             st.session_state["radius_km"] = 10
@@ -956,7 +966,6 @@ def page_explore():
     with c3:
         go = st.button("Search", type="primary", use_container_width=True)
 
-    # Sensitivities + Include/Exclude in one compact row
     s_row1, s_row2 = st.columns([2.2, 2.8])
     with s_row1:
         sensitivities = st.multiselect(
@@ -973,12 +982,10 @@ def page_explore():
             "Community events","Ice skating","Sports fields","Parks","Community centers",
             "Tracks","Greenways","Free","Paid"
         ]
-        # Preselect user favorites into Include
         include_default = sorted(default_inc) if default_inc else []
-        include_set = set(st.multiselect("Include activities (any match)", ALL_ACTIVITIES, default=include_default, key="inc_ms"))
+        include_set = set(st.multiselect("Include activities (any)", ALL_ACTIVITIES, default=include_default, key="inc_ms"))
         exclude_set = set(st.multiselect("Exclude activities", ALL_ACTIVITIES, default=[], key="exc_ms"))
 
-    # Quick attribute toggles — single compact row
     st.markdown('<div class="hp-toggle-row">', unsafe_allow_html=True)
     tl1, tl2, tl3, tl4, tl5, tl6, tl7, tl8 = st.columns(8)
     with tl1: q_indoor = st.checkbox("Indoor", key="q_indoor")
@@ -987,7 +994,6 @@ def page_explore():
     with tl4: q_paved = st.checkbox("Paved", key="q_paved")
     with tl5: q_wheel = st.checkbox("Wheelchair", key="q_wheel")
     with tl6: q_free = st.checkbox("Free", key="q_free")
-    # Mutually exclusive: Away vs Near
     with tl7:
         q_away = st.checkbox("Away from traffic", key="q_away")
         if q_away and st.session_state.get("q_near"):
@@ -998,7 +1004,7 @@ def page_explore():
             st.session_state["q_away"] = False
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # Saved presets (minimal, collapsed)
+    # Presets (collapsed)
     if me:
         with st.expander("⭐ Presets", expanded=False):
             colP1, colP2 = st.columns([1.8, 2.2])
@@ -1029,7 +1035,6 @@ def page_explore():
                 else:
                     for p in user_presets[:25]:
                         pl = json.loads(p["payload"])
-                        # Backward compatibility for older tri-state payloads
                         if "act_filters" in pl and "include" not in pl and "exclude" not in pl:
                             inc = [k for k,v in pl["act_filters"].items() if int(v)==1]
                             exc = [k for k,v in pl["act_filters"].items() if int(v)==-1]
@@ -1053,26 +1058,22 @@ def page_explore():
                                     st.toast("Preset deleted", icon="🗑️"); safe_rerun()
     st.markdown('</div>', unsafe_allow_html=True)  # end filter card
 
-    # No search yet → keep page short
     if not go:
         st.info("Set filters above and click **Search** to see results below.")
         return
 
-    # ======== SEARCH & RESULTS (list only) ========
+    # ======== SEARCH ========
     if not address.strip():
         st.error("Please enter a city/address/ZIP.")
         return
-
     loc = geocode_address(address.strip())
     if not loc:
         st.error("Couldn't geocode that location. Try a nearby city or ZIP.")
         return
-
     lat, lon = loc["lat"], loc["lon"]
     tzname = guess_timezone(lat, lon)
     keys = load_optional_keys()
 
-    # Location + suggested times (compact)
     st.markdown('<div class="hp-card">', unsafe_allow_html=True)
     l1, l2 = st.columns([2.2, 2.8])
     with l1:
@@ -1090,6 +1091,7 @@ def page_explore():
     st.markdown('</div>', unsafe_allow_html=True)
 
     st.subheader("Public resources nearby")
+
     with st.spinner("Querying OpenStreetMap for places..."):
         places = fetch_places(lat, lon, radius_km)
         roads  = fetch_roads(lat, lon, radius_km)
@@ -1113,16 +1115,12 @@ def page_explore():
         feats.append({**row.to_dict(), **cls, "score": score})
     features = pd.DataFrame(feats)
 
-    # Apply include/exclude activities
+    # Filters
     def _match_sets(activity_set: set[str], inc: set[str], exc: set[str]) -> bool:
-        if activity_set & exc:
-            return False
-        if inc and not (activity_set & inc):
-            return False
+        if activity_set & exc: return False
+        if inc and not (activity_set & inc): return False
         return True
     features = features[features["activities"].apply(lambda s: _match_sets(s, include_set, exclude_set))].copy()
-
-    # Quick attribute filters (strict)
     if q_indoor:      features = features[features["indoor"] == True]
     if q_waterfront:  features = features[features["waterfront"] == True]
     if q_wheel:       features = features[features["wheelchair"] == True]
@@ -1130,7 +1128,6 @@ def page_explore():
     if q_away:        features = features[features["road_distance_m"].fillna(1e9) > 350]
     elif q_near:      features = features[features["road_distance_m"].fillna(0) < 120]
 
-    # Soft bumps
     def _soft_pref_bump(row):
         bump = 0
         if q_shaded and row.get("shaded_possible"): bump += 3
@@ -1143,54 +1140,114 @@ def page_explore():
         st.warning("No places match those filters. Try clearing some toggles.")
         return
 
-    # Sort and render list (no grid)
-    features = features.sort_values(["score","distance_km"], ascending=[False, True]).reset_index(drop=True)
+    # Sort + take top N (controls both list and map)
+    TOP_N = 30
+    features = features.sort_values(["score","distance_km"], ascending=[False, True]).reset_index(drop=True).head(TOP_N)
+    features["rank"] = features.index + 1  # used for list numbering & map labels
 
-    def make_badges(r):
-        chips=[]
-        if r["indoor"]: chips.append('<span class="hp-chip">indoor</span>')
-        if r["shaded_possible"]: chips.append('<span class="hp-chip">shaded</span>')
-        if r["waterfront"]: chips.append('<span class="hp-chip">waterfront</span>')
-        if r["paved"]: chips.append('<span class="hp-chip">paved</span>')
-        if r["wheelchair"]: chips.append('<span class="hp-chip">wheelchair</span>')
-        if r["pollen_risk"]=="low": chips.append('<span class="hp-chip">low-pollen</span>')
-        elif r["pollen_risk"]=="higher": chips.append('<span class="hp-chip">higher-pollen</span>')
-        if r.get("is_free") is True: chips.append('<span class="hp-chip">free</span>')
-        if r.get("is_paid") is True: chips.append('<span class="hp-chip">paid</span>')
-        if r.get("road_distance_m") is not None:
-            if r["road_distance_m"] > 350: chips.append('<span class="hp-chip">away from traffic</span>')
-            elif r["road_distance_m"] < 120: chips.append('<span class="hp-chip">near traffic</span>')
-        acts = ", ".join(sorted(r["activities"])) if r["activities"] else "—"
-        chips.append(f'<span class="hp-chip">{acts}</span>')
-        return " ".join(chips)
+    # Save a focus point if user clicks "Focus" on an item
+    if "map_focus" not in st.session_state:
+        st.session_state["map_focus"] = None
 
-    for _, r in features.head(30).iterrows():
-        st.markdown('<div class="hp-card">', unsafe_allow_html=True)
-        st.markdown(f"**{r['name']}** &nbsp;·&nbsp; _{r['kind']}_")
-        st.caption(f"{r['distance_km']:.2f} km away  •  Score: {r['score']:.0f}")
-        st.markdown(make_badges(r), unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
+    # ======== TWO-PANE LAYOUT: LIST (left) + MAP (right) ========
+    colL, colR = st.columns([1.1, 1.9], gap="small")
 
-    # Optional: Map in expander to keep page compact
-    with st.expander("🗺️ Map (optional)"):
-        _safe_cols = ["lat","lon","name","distance_km","score"]
-        map_df = features[_safe_cols].copy()
-        for c in ["lat","lon","distance_km","score"]:
+    # -------- LIST (left) --------
+    with colL:
+        st.markdown('<div class="hp-results-left">', unsafe_allow_html=True)
+        for _, r in features.iterrows():
+            st.markdown('<div class="hp-card">', unsafe_allow_html=True)
+            st.markdown(f"### {int(r['rank'])}. {r['name']}")
+            st.caption(f"{r['kind']} • {r['distance_km']:.2f} km • Score {r['score']:.0f}")
+            # badges
+            chips=[]
+            if r["indoor"]: chips.append('<span class="hp-chip">indoor</span>')
+            if r["shaded_possible"]: chips.append('<span class="hp-chip">shaded</span>')
+            if r["waterfront"]: chips.append('<span class="hp-chip">waterfront</span>')
+            if r["paved"]: chips.append('<span class="hp-chip">paved</span>')
+            if r["wheelchair"]: chips.append('<span class="hp-chip">wheelchair</span>')
+            if r["pollen_risk"]=="low": chips.append('<span class="hp-chip">low-pollen</span>')
+            elif r["pollen_risk"]=="higher": chips.append('<span class="hp-chip">higher-pollen</span>')
+            if r.get("is_free") is True: chips.append('<span class="hp-chip">free</span>')
+            if r.get("is_paid") is True: chips.append('<span class="hp-chip">paid</span>')
+            if r.get("road_distance_m") is not None:
+                if r["road_distance_m"] > 350: chips.append('<span class="hp-chip">away from traffic</span>')
+                elif r["road_distance_m"] < 120: chips.append('<span class="hp-chip">near traffic</span>')
+            acts = ", ".join(sorted(r["activities"])) if r["activities"] else "—"
+            chips.append(f'<span class="hp-chip">{acts}</span>')
+            st.markdown(" ".join(chips), unsafe_allow_html=True)
+
+            # Focus button to center map on this item
+            c1, c2 = st.columns([0.6, 0.4])
+            with c1:
+                pass
+            with c2:
+                st.markdown('<div class="hp-pill-btn">', unsafe_allow_html=True)
+                if st.button("Focus", key=f"focus_{r['id']}"):
+                    st.session_state["map_focus"] = {"lat": float(r["lat"]), "lon": float(r["lon"]), "name": r["name"]}
+                    st.toast(f"Centered on: {r['name']}", icon="🧭")
+                    safe_rerun()
+                st.markdown('</div>', unsafe_allow_html=True)
+            st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)  # scroll container
+
+    # -------- MAP (right) --------
+    with colR:
+        # Map shows ONLY markers for items in the list (reduced noise)
+        map_df = features[["lat","lon","name","rank","distance_km","score"]].copy()
+        for c in ["lat","lon","distance_km","score","rank"]:
             map_df[c] = map_df[c].astype(float)
+
+        # Tooltip text
         def _fmt_tooltip(rr):
-            return f"{rr['name']} — score {rr['score']:.0f}\\n{rr['distance_km']:.2f} km away"
+            return f"{int(rr['rank'])}. {rr['name']}\\n{rr['distance_km']:.2f} km — score {rr['score']:.0f}"
         map_df["tooltip"] = map_df.apply(_fmt_tooltip, axis=1)
 
-        initial_view = pdk.ViewState(latitude=float(lat), longitude=float(lon), zoom=12, pitch=0)
-        layer_points = pdk.Layer("ScatterplotLayer", data=map_df, get_position='[lon, lat]', get_radius=100, pickable=True, radius_min_pixels=6, radius_max_pixels=40)
-        layer_text = pdk.Layer("TextLayer", data=map_df, get_position='[lon, lat]', get_text="name", get_size=12, get_alignment_baseline='"bottom"')
-        circle_data = pd.DataFrame([{"lat": float(lat), "lon": float(lon), "r": float(radius_km) * 1000.0}])
-        layer_center = pdk.Layer("ScatterplotLayer", data=circle_data, get_position='[lon, lat]', get_radius="r", radius_min_pixels=0, radius_max_pixels=2000, stroked=True, filled=False, line_width_min_pixels=1)
-        deck = pdk.Deck(map_style=None, initial_view_state=initial_view, layers=[layer_center, layer_points, layer_text], tooltip={"text": "{tooltip}"})
-        st.pydeck_chart(deck)
+        # Determine map view: focus if set; else center on search with radius-based zoom
+        def radius_to_zoom(km):
+            # Heuristic: smaller radius -> bigger zoom
+            if km <= 3: return 13.5
+            if km <= 6: return 12.5
+            if km <= 10: return 12
+            if km <= 15: return 11
+            if km <= 20: return 10.5
+            return 10
+        if st.session_state.get("map_focus"):
+            fc = st.session_state["map_focus"]
+            init_view = pdk.ViewState(latitude=fc["lat"], longitude=fc["lon"], zoom=14, pitch=0)
+        else:
+            init_view = pdk.ViewState(latitude=float(lat), longitude=float(lon), zoom=radius_to_zoom(float(radius_km)), pitch=0)
+
+        # Layers: numbered text labels + points (minimal noise)
+        layer_points = pdk.Layer(
+            "ScatterplotLayer",
+            data=map_df,
+            get_position='[lon, lat]',
+            get_radius=90,            # compact
+            pickable=True,
+            radius_min_pixels=5,
+            radius_max_pixels=40
+        )
+        layer_labels = pdk.Layer(
+            "TextLayer",
+            data=map_df,
+            get_position='[lon, lat]',
+            get_text="rank",
+            get_size=16,
+            get_alignment_baseline='"center"',
+            get_pixel_offset='[0, -18]'
+        )
+
+        deck = pdk.Deck(
+            initial_view_state=init_view,
+            layers=[layer_points, layer_labels],
+            tooltip={"text": "{tooltip}"},
+            map_style=None  # keep default; we only plot the points from the list
+        )
+        st.pydeck_chart(deck, use_container_width=True, height=640)
 
 # =========================
-# COMMUNITY PAGE
+# COMMUNITY PAGE (unchanged)
 # =========================
 def page_community():
     st.markdown("### 👥 Community: Groups, Outings & Posts")
