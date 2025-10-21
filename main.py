@@ -64,7 +64,7 @@ def inject_theme():
       /* Header bar */
       .hp-header{
         position:sticky; top:0; z-index:999;
-        margin:-1.2rem -1rem 0.5rem -1rem;
+        margin:-1.2rem -1rem .5rem -1rem;
         padding:.6rem 1rem;
         background:linear-gradient(90deg,var(--hp-teal) 0%, var(--hp-primary) 100%);
         box-shadow:0 3px 18px rgba(0,0,0,.12);
@@ -88,9 +88,6 @@ def inject_theme():
         transition: background .15s ease;
       }
       .stButton > button[kind="primary"]:hover{background:#0F5DC0;}
-
-      /* Hide any DataFrame UI (we don’t render the grid anymore) */
-      [data-testid="stDataFrame"]{display:none !important;}
 
       /* Toggle row spacing */
       .hp-toggle-row label{margin-right:14px;}
@@ -116,9 +113,10 @@ def inject_theme():
         color: #0f4da2 !important;
         font-weight: 700 !important;
       }
-      .hp-item-btn button:hover{
-        text-decoration: underline;
-      }
+      .hp-item-btn button:hover{ text-decoration: underline; }
+
+      /* Always reserve space for the two-pane section so it doesn't jump */
+      .hp-reserve{ min-height: 740px; }
     </style>
     """)
 
@@ -516,7 +514,7 @@ def list_posts(gid):
       SELECT p.*, u.username
       FROM posts p JOIN users u ON u.id=p.user_id
       WHERE p.group_id=? ORDER BY p.created_at DESC
-    """, (gid,))
+    """, (group_id:=gid,))
     rows = [dict(r) for r in cur.fetchall()]
     conn.close(); return rows
 
@@ -802,8 +800,6 @@ def score_feature(feat, active, distance_km, road_distance_m):
 # =========================
 # Weather windows
 # =========================
-OWM_ONECALL_URL = "https://api.openweathermap.org/data/3.0/onecall"
-
 @st.cache_data(show_spinner=False, ttl=1800)
 def fetch_weather_context(lat, lon, tzname, keys):
     tz = pytz.timezone(tzname)
@@ -894,8 +890,19 @@ def set_route(r):
     st.session_state["route"] = r
     safe_rerun()
 
+# Helpers to persist results across reruns and to show aligned list+map even before search
+def _store_results(features_df, center_lat, center_lon, tzname):
+    if features_df is None or features_df.empty:
+        st.session_state["results"] = {"features": [], "center": {"lat": center_lat, "lon": center_lon}, "tz": tzname}
+    else:
+        feats = features_df.to_dict(orient="records")
+        st.session_state["results"] = {"features": feats, "center": {"lat": center_lat, "lon": center_lon}, "tz": tzname}
+
+def _load_results():
+    return st.session_state.get("results", {"features": [], "center": None, "tz": "UTC"})
+
 # =========================
-# EXPLORE PAGE (list+map; auto-fit; hover highlight; click-to-focus)
+# EXPLORE PAGE (always-aligned list+map; scrollable list; focus on click)
 # =========================
 def page_explore():
     st.markdown("### 🔍 Explore activities near you")
@@ -915,10 +922,9 @@ def page_explore():
     st.markdown('<div class="hp-card hp-compact">', unsafe_allow_html=True)
     c1, c2, c3 = st.columns([4, 1.5, 1])
     with c1:
-        address = st.text_input("Where?", value="Portland, ME", placeholder="City / address / ZIP")
+        address = st.text_input("Where?", value=st.session_state.get("last_address", "Portland, ME"), placeholder="City / address / ZIP")
     with c2:
-        if "radius_km" not in st.session_state:
-            st.session_state["radius_km"] = 10
+        if "radius_km" not in st.session_state: st.session_state["radius_km"] = 10
         radius_km = st.slider("Radius (km)", 2, 30, int(st.session_state["radius_km"]), 1)
         st.session_state["radius_km"] = radius_km
     with c3:
@@ -941,8 +947,8 @@ def page_explore():
             "Tracks","Greenways","Free","Paid"
         ]
         include_default = sorted(default_inc) if default_inc else []
-        include_set = set(st.multiselect("Include activities (any)", ALL_ACTIVITIES, default=include_default, key="inc_ms"))
-        exclude_set = set(st.multiselect("Exclude activities", ALL_ACTIVITIES, default=[], key="exc_ms"))
+        include_set = set(st.multiselect("Include activities (any)", ALL_ACTIVITIES, default=st.session_state.get("inc_ms", include_default), key="inc_ms"))
+        exclude_set = set(st.multiselect("Exclude activities", ALL_ACTIVITIES, default=st.session_state.get("exc_ms", []), key="exc_ms"))
 
     st.markdown('<div class="hp-toggle-row">', unsafe_allow_html=True)
     tl1, tl2, tl3, tl4, tl5, tl6, tl7, tl8 = st.columns(8)
@@ -978,7 +984,8 @@ def page_explore():
                             "q_away": q_away, "q_near": q_near
                         },
                         "sensitivities": sensitivities,
-                        "radius_km": radius_km
+                        "radius_km": radius_km,
+                        "address": address
                     }
                     if not preset_name.strip():
                         st.error("Please name your preset.")
@@ -993,10 +1000,6 @@ def page_explore():
                 else:
                     for p in user_presets[:25]:
                         pl = json.loads(p["payload"])
-                        if "act_filters" in pl and "include" not in pl and "exclude" not in pl:
-                            inc = [k for k,v in pl["act_filters"].items() if int(v)==1]
-                            exc = [k for k,v in pl["act_filters"].items() if int(v)==-1]
-                            pl["include"], pl["exclude"] = inc, exc
                         cA, cB, cC = st.columns([0.5, 1.4, 0.6])
                         with cA:
                             if st.button("Apply", key=f"apply_{p['id']}"):
@@ -1005,6 +1008,7 @@ def page_explore():
                                 for k, v in pl.get("toggles", {}).items(): st.session_state[k] = bool(v)
                                 st.session_state["sens_pick"] = pl.get("sensitivities", [])
                                 st.session_state["radius_km"] = int(pl.get("radius_km", radius_km))
+                                st.session_state["last_address"] = pl.get("address", address)
                                 st.toast(f"Applied preset: {p['name']}", icon="✅")
                                 safe_rerun()
                         with cB:
@@ -1016,108 +1020,120 @@ def page_explore():
                                     st.toast("Preset deleted", icon="🗑️"); safe_rerun()
     st.markdown('</div>', unsafe_allow_html=True)  # end filter card
 
-    if not go:
-        st.info("Set filters above and click **Search** to see results below.")
-        return
+    # ======== ALWAYS RENDER THE TWO-PANE SECTION (aligned & scrollable) ========
+    MAP_H = 680
+    st.markdown(f"<style>.hp-results-left{{height:{MAP_H}px;}} .hp-reserve{{min-height:{MAP_H+60}px}}</style>", unsafe_allow_html=True)
 
-    # ======== SEARCH ========
-    if not address.strip():
-        st.error("Please enter a city/address/ZIP.")
-        return
-    loc = geocode_address(address.strip())
-    if not loc:
-        st.error("Couldn't geocode that location. Try a nearby city or ZIP.")
-        return
-    lat, lon = loc["lat"], loc["lon"]
-    tzname = guess_timezone(lat, lon)
-    keys = load_optional_keys()
+    # If the user hasn't searched yet, show a baseline centered on the default address
+    need_fresh_results = False
+    if go:
+        st.session_state["last_address"] = address
+        need_fresh_results = True
+    elif "results" not in st.session_state:
+        # First load: geocode default to center the map (no markers yet)
+        base_loc = geocode_address(address.strip()) or {"lat": 43.661, "lon": -70.255, "display_name":"Portland, ME"}
+        _store_results(pd.DataFrame([]), base_loc["lat"], base_loc["lon"], guess_timezone(base_loc["lat"], base_loc["lon"]))
 
-    st.markdown('<div class="hp-card">', unsafe_allow_html=True)
-    l1, l2 = st.columns([2.2, 2.8])
-    with l1:
-        st.subheader("Location")
-        st.caption(loc["display_name"])
-        st.caption(f"Lat/Lon: {lat:.5f}, {lon:.5f} • {tzname}")
-    with l2:
-        weather_ctx = fetch_weather_context(lat, lon, tzname, keys)
-        windows = build_time_windows(weather_ctx, set(sensitivities))
-        st.markdown("**Suggested times today (local):** " + format_window_str(windows))
-        if weather_ctx.get("notes"):
-            with st.expander("Weather notes"):
-                for n in weather_ctx["notes"]:
-                    st.write("• " + n)
-    st.markdown('</div>', unsafe_allow_html=True)
+    if need_fresh_results:
+        # ======== RUN SEARCH ========
+        if not address.strip():
+            st.error("Please enter a city/address/ZIP.")
+            return
+        loc = geocode_address(address.strip())
+        if not loc:
+            st.error("Couldn't geocode that location. Try a nearby city or ZIP.")
+            return
+        lat, lon = loc["lat"], loc["lon"]
+        tzname = guess_timezone(lat, lon)
+        keys = load_optional_keys()
 
-    st.subheader("Public resources nearby")
+        st.markdown('<div class="hp-card">', unsafe_allow_html=True)
+        l1, l2 = st.columns([2.2, 2.8])
+        with l1:
+            st.subheader("Location")
+            st.caption(loc["display_name"])
+            st.caption(f"Lat/Lon: {lat:.5f}, {lon:.5f} • {tzname}")
+        with l2:
+            weather_ctx = fetch_weather_context(lat, lon, tzname, keys)
+            windows = build_time_windows(weather_ctx, set(sensitivities))
+            st.markdown("**Suggested times today (local):** " + format_window_str(windows))
+            if weather_ctx.get("notes"):
+                with st.expander("Weather notes"):
+                    for n in weather_ctx["notes"]:
+                        st.write("• " + n)
+        st.markdown('</div>', unsafe_allow_html=True)
 
-    with st.spinner("Querying OpenStreetMap for places..."):
-        places = fetch_places(lat, lon, radius_km)
-        roads  = fetch_roads(lat, lon, radius_km)
+        with st.spinner("Querying OpenStreetMap for places..."):
+            places = fetch_places(lat, lon, radius_km)
+            roads  = fetch_roads(lat, lon, radius_km)
 
-    if places.empty:
-        st.warning("No public activity places found within that radius. Try enlarging the search.")
-        return
+        if places.empty:
+            _store_results(pd.DataFrame([]), lat, lon, tzname)
+            st.warning("No public activity places found within that radius. Try enlarging the search.")
+        else:
+            # compute distances to roads
+            def nearest_road_m(latp, lonp):
+                if roads is None or roads.empty: return None
+                dmins = [haversine_km(latp, lonp, rlat, rlon)*1000 for rlat, rlon in zip(roads["lat"].values, roads["lon"].values)]
+                return min(dmins) if dmins else None
+            places["road_distance_m"] = places.apply(lambda r: nearest_road_m(r["lat"], r["lon"]), axis=1)
 
-    def nearest_road_m(latp, lonp):
-        if roads is None or roads.empty: return None
-        dmins = [haversine_km(latp, lonp, rlat, rlon)*1000 for rlat, rlon in zip(roads["lat"].values, roads["lon"].values)]
-        return min(dmins) if dmins else None
+            active = set(sensitivities)
+            feats = []
+            for _, row in places.iterrows():
+                cls = classify_feature(row)
+                score = score_feature(cls, active, row["distance_km"], row["road_distance_m"])
+                feats.append({**row.to_dict(), **cls, "score": score})
+            features = pd.DataFrame(feats)
 
-    places["road_distance_m"] = places.apply(lambda r: nearest_road_m(r["lat"], r["lon"]), axis=1)
+            # filters
+            def _match_sets(activity_set: set[str], inc: set[str], exc: set[str]) -> bool:
+                if activity_set & exc: return False
+                if inc and not (activity_set & inc): return False
+                return True
+            features = features[features["activities"].apply(lambda s: _match_sets(s, set(st.session_state["inc_ms"]), set(st.session_state["exc_ms"])))].copy()
+            if st.session_state.get("q_indoor"):      features = features[features["indoor"] == True]
+            if st.session_state.get("q_waterfront"):  features = features[features["waterfront"] == True]
+            if st.session_state.get("q_wheel"):       features = features[features["wheelchair"] == True]
+            if st.session_state.get("q_free"):        features = features[features["is_free"] == True]
+            if st.session_state.get("q_away"):        features = features[features["road_distance_m"].fillna(1e9) > 350]
+            elif st.session_state.get("q_near"):      features = features[features["road_distance_m"].fillna(0) < 120]
 
-    active = set(sensitivities)
-    feats = []
-    for _, row in places.iterrows():
-        cls = classify_feature(row)
-        score = score_feature(cls, active, row["distance_km"], row["road_distance_m"])
-        feats.append({**row.to_dict(), **cls, "score": score})
-    features = pd.DataFrame(feats)
+            def _soft_pref_bump(row):
+                bump = 0
+                if st.session_state.get("q_shaded") and row.get("shaded_possible"): bump += 3
+                if st.session_state.get("q_paved") and row.get("paved"): bump += 3
+                return row["score"] + bump
+            if not features.empty:
+                features["score"] = features.apply(_soft_pref_bump, axis=1)
 
-    # Filters
-    def _match_sets(activity_set: set[str], inc: set[str], exc: set[str]) -> bool:
-        if activity_set & exc: return False
-        if inc and not (activity_set & inc): return False
-        return True
-    features = features[features["activities"].apply(lambda s: _match_sets(s, include_set, exclude_set))].copy()
-    if q_indoor:      features = features[features["indoor"] == True]
-    if q_waterfront:  features = features[features["waterfront"] == True]
-    if q_wheel:       features = features[features["wheelchair"] == True]
-    if q_free:        features = features[features["is_free"] == True]
-    if q_away:        features = features[features["road_distance_m"].fillna(1e9) > 350]
-    elif q_near:      features = features[features["road_distance_m"].fillna(0) < 120]
+            TOP_N = 30
+            if features.empty:
+                _store_results(pd.DataFrame([]), lat, lon, tzname)
+                st.warning("No places match those filters. Try clearing some toggles.")
+            else:
+                features = features.sort_values(["score","distance_km"], ascending=[False, True]).reset_index(drop=True).head(TOP_N)
+                features["rank"] = features.index + 1
+                _store_results(features, lat, lon, tzname)
 
-    def _soft_pref_bump(row):
-        bump = 0
-        if q_shaded and row.get("shaded_possible"): bump += 3
-        if q_paved and row.get("paved"): bump += 3
-        return row["score"] + bump
-    if not features.empty:
-        features["score"] = features.apply(_soft_pref_bump, axis=1)
+    # ======== RENDER TWO-PANE (ALWAYS) ========
+    bundle = _load_results()
+    feats_list = bundle["features"]
+    center = bundle["center"] or {"lat": 43.661, "lon": -70.255}
+    tzname = bundle.get("tz", "UTC")
 
-    if features.empty:
-        st.warning("No places match those filters. Try clearing some toggles.")
-        return
-
-    # Sort + take top N (controls both list and map)
-    TOP_N = 30
-    features = features.sort_values(["score","distance_km"], ascending=[False, True]).reset_index(drop=True).head(TOP_N)
-    features["rank"] = features.index + 1  # used for list numbering & map labels
-
-    # ======== AUTO-FIT / FOCUS STATE ========
+    # Keep map focus if set; else compute from features
     if "map_focus" not in st.session_state:
         st.session_state["map_focus"] = None
 
     def compute_autofit_view(df: pd.DataFrame):
-        # Compute bounding box and a heuristic zoom
         min_lat, max_lat = df["lat"].min(), df["lat"].max()
         min_lon, max_lon = df["lon"].min(), df["lon"].max()
         center_lat = float((min_lat + max_lat) / 2.0)
         center_lon = float((min_lon + max_lon) / 2.0)
-        # Span in degrees -> rough zoom; tuned for web mercator
         span_lat = max(0.0001, max_lat - min_lat)
         span_lon = max(0.0001, max_lon - min_lon)
         span = max(span_lat, span_lon)
-        # Heuristic mapping span to zoom (smaller span -> larger zoom)
         if span < 0.005: zoom = 15
         elif span < 0.01: zoom = 14
         elif span < 0.02: zoom = 13
@@ -1128,99 +1144,93 @@ def page_explore():
         else: zoom = 9.5
         return center_lat, center_lon, zoom
 
-    # ======== TWO-PANE LAYOUT: LIST (left) + MAP (right) ========
-    MAP_H = 680  # shared height
-    st.markdown(
-        f"<style>.hp-results-left{{height:{MAP_H}px;}}</style>",
-        unsafe_allow_html=True
-    )
+    st.markdown('<div class="hp-reserve">', unsafe_allow_html=True)
     colL, colR = st.columns([1.05, 1.95], gap="small")
 
     # -------- LIST (left) --------
     with colL:
-        st.markdown('<div class="hp-results-left">', unsafe_allow_html=True)
-        for _, r in features.iterrows():
+        st.markdown(f'<div class="hp-results-left" style="height:{MAP_H}px;">', unsafe_allow_html=True)
+        if not feats_list:
             st.markdown('<div class="hp-card">', unsafe_allow_html=True)
-            # Make the title itself clickable; clicking recenters the map
-            st.markdown('<div class="hp-item-btn">', unsafe_allow_html=True)
-            if st.button(f"{int(r['rank'])}. {r['name']}", key=f"sel_{r['id']}"):
-                st.session_state["map_focus"] = {"lat": float(r["lat"]), "lon": float(r["lon"]), "name": r["name"]}
-                st.toast(f"Centered on: {r['name']}", icon="🧭")
-                safe_rerun()
+            st.caption("Results will appear here after you search.")
             st.markdown('</div>', unsafe_allow_html=True)
+        else:
+            for r in feats_list:
+                st.markdown('<div class="hp-card">', unsafe_allow_html=True)
+                st.markdown('<div class="hp-item-btn">', unsafe_allow_html=True)
+                if st.button(f"{int(r['rank'])}. {r['name']}", key=f"sel_{r['id']}"):
+                    st.session_state["map_focus"] = {"lat": float(r["lat"]), "lon": float(r["lon"]), "name": r["name"]}
+                    st.toast(f"Centered on: {r['name']}", icon="🧭")
+                    safe_rerun()
+                st.markdown('</div>', unsafe_allow_html=True)
+                st.caption(f"{r['kind']} • {r['distance_km']:.2f} km • Score {r['score']:.0f}")
 
-            st.caption(f"{r['kind']} • {r['distance_km']:.2f} km • Score {r['score']:.0f}")
-            # badges
-            chips=[]
-            if r["indoor"]: chips.append('<span class="hp-chip">indoor</span>')
-            if r["shaded_possible"]: chips.append('<span class="hp-chip">shaded</span>')
-            if r["waterfront"]: chips.append('<span class="hp-chip">waterfront</span>')
-            if r["paved"]: chips.append('<span class="hp-chip">paved</span>')
-            if r["wheelchair"]: chips.append('<span class="hp-chip">wheelchair</span>')
-            if r["pollen_risk"]=="low": chips.append('<span class="hp-chip">low-pollen</span>')
-            elif r["pollen_risk"]=="higher": chips.append('<span class="hp-chip">higher-pollen</span>')
-            if r.get("is_free") is True: chips.append('<span class="hp-chip">free</span>')
-            if r.get("is_paid") is True: chips.append('<span class="hp-chip">paid</span>')
-            if r.get("road_distance_m") is not None:
-                if r["road_distance_m"] > 350: chips.append('<span class="hp-chip">away from traffic</span>')
-                elif r["road_distance_m"] < 120: chips.append('<span class="hp-chip">near traffic</span>')
-            acts = ", ".join(sorted(r["activities"])) if r["activities"] else "—"
-            chips.append(f'<span class="hp-chip">{acts}</span>')
-            st.markdown(" ".join(chips), unsafe_allow_html=True)
-            st.markdown('</div>', unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)  # scroll container
+                chips=[]
+                if r["indoor"]: chips.append('<span class="hp-chip">indoor</span>')
+                if r["shaded_possible"]: chips.append('<span class="hp-chip">shaded</span>')
+                if r["waterfront"]: chips.append('<span class="hp-chip">waterfront</span>')
+                if r["paved"]: chips.append('<span class="hp-chip">paved</span>')
+                if r["wheelchair"]: chips.append('<span class="hp-chip">wheelchair</span>')
+                if r["pollen_risk"]=="low": chips.append('<span class="hp-chip">low-pollen</span>')
+                elif r["pollen_risk"]=="higher": chips.append('<span class="hp-chip">higher-pollen</span>')
+                if r.get("is_free") is True: chips.append('<span class="hp-chip">free</span>')
+                if r.get("is_paid") is True: chips.append('<span class="hp-chip">paid</span>')
+                if r.get("road_distance_m") is not None:
+                    if r["road_distance_m"] > 350: chips.append('<span class="hp-chip">away from traffic</span>')
+                    elif r["road_distance_m"] < 120: chips.append('<span class="hp-chip">near traffic</span>')
+                acts = ", ".join(sorted(r["activities"])) if r["activities"] else "—"
+                chips.append(f'<span class="hp-chip">{acts}</span>')
+                st.markdown(" ".join(chips), unsafe_allow_html=True)
+                st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
 
     # -------- MAP (right) --------
     with colR:
-        # Map shows ONLY markers for items in the list (reduced noise)
-        map_df = features[["lat","lon","name","rank","distance_km","score"]].copy()
-        for c in ["lat","lon","distance_km","score","rank"]:
-            map_df[c] = map_df[c].astype(float)
+        # Build dataframe for map markers (only items in list)
+        if feats_list:
+            map_df = pd.DataFrame(feats_list)[["lat","lon","name","rank","distance_km","score"]].copy()
+            for c in ["lat","lon","distance_km","score","rank"]:
+                map_df[c] = map_df[c].astype(float)
+            map_df["tooltip"] = map_df.apply(lambda rr: f"{int(rr['rank'])}. {rr['name']}\\n{rr['distance_km']:.2f} km — score {rr['score']:.0f}", axis=1)
+        else:
+            # empty df to render no markers
+            map_df = pd.DataFrame(columns=["lat","lon","name","rank","distance_km","score","tooltip"])
 
-        # Tooltip text
-        def _fmt_tooltip(rr):
-            return f"{int(rr['rank'])}. {rr['name']}\\n{rr['distance_km']:.2f} km — score {rr['score']:.0f}"
-        map_df["tooltip"] = map_df.apply(_fmt_tooltip, axis=1)
-
-        # Determine map view: focus if set; else auto-fit to current markers
+        # Choose initial view
         if st.session_state.get("map_focus"):
             fc = st.session_state["map_focus"]
             init_view = pdk.ViewState(latitude=fc["lat"], longitude=fc["lon"], zoom=15, pitch=0)
-        else:
+        elif not map_df.empty:
             c_lat, c_lon, c_zoom = compute_autofit_view(map_df)
             init_view = pdk.ViewState(latitude=c_lat, longitude=c_lon, zoom=c_zoom, pitch=0)
+        else:
+            # baseline center on geocoded address with modest zoom
+            init_view = pdk.ViewState(latitude=float(center["lat"]), longitude=float(center["lon"]), zoom=11.5, pitch=0)
 
-        # Layers: numbered labels + points; enable hover highlight
-        layer_points = pdk.Layer(
-            "ScatterplotLayer",
-            data=map_df,
-            get_position='[lon, lat]',
-            get_radius=90,
-            pickable=True,
-            auto_highlight=True,
-            radius_min_pixels=5,
-            radius_max_pixels=40
-        )
-        layer_labels = pdk.Layer(
-            "TextLayer",
-            data=map_df,
-            get_position='[lon, lat]',
-            get_text="rank",
-            get_size=16,
-            get_alignment_baseline='"center"',
-            get_pixel_offset='[0, -18]'
-        )
-
-        deck = pdk.Deck(
-            initial_view_state=init_view,
-            layers=[layer_points, layer_labels],
-            tooltip={"text": "{tooltip}"},
-            map_style=None
-        )
+        layers = []
+        if not map_df.empty:
+            layers.append(pdk.Layer(
+                "ScatterplotLayer",
+                data=map_df, get_position='[lon, lat]',
+                get_radius=90, pickable=True, auto_highlight=True,
+                radius_min_pixels=5, radius_max_pixels=40
+            ))
+            layers.append(pdk.Layer(
+                "TextLayer",
+                data=map_df,
+                get_position='[lon, lat]',
+                get_text="rank",
+                get_size=16,
+                get_alignment_baseline='"center"',
+                get_pixel_offset='[0, -18]'
+            ))
+        deck = pdk.Deck(initial_view_state=init_view, layers=layers, tooltip={"text": "{tooltip}"}, map_style=None)
         st.pydeck_chart(deck, use_container_width=True, height=MAP_H)
 
+    st.markdown('</div>', unsafe_allow_html=True)  # end hp-reserve (layout spacer)
+
 # =========================
-# AUTH + COMMUNITY + PROFILE (unchanged)
+# AUTH + COMMUNITY + PROFILE (unchanged from prior)
 # =========================
 def render_auth_gate():
     if st.session_state.user_id is not None:
@@ -1576,4 +1586,3 @@ else:
 # =========================
 st.markdown("---")
 st.write("Data © OpenStreetMap contributors. Weather via OpenWeatherMap (if key provided). Profiles/groups/outings stored locally in SQLite (`data.db`). Be respectful and safe when meeting others.")
-
