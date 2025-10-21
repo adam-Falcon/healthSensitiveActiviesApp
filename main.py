@@ -43,8 +43,13 @@ st.set_page_config(
 # =========================
 # THEME / CSS (safe injector)
 # =========================
+# =========================
+# THEME / CSS (safe injector)
+# =========================
+import streamlit.components.v1 as components
+
 def inject_theme():
-    st.markdown("""
+    components.html("""
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Nunito:wght@800&display=swap" rel="stylesheet">
     <style id="hp-css">
@@ -93,19 +98,14 @@ def inject_theme():
         color:#fff; font-weight:600; border-radius:10px; padding:.45rem .85rem;
         transition: background .15s ease;
       }
-      .stButton > button[kind="primary"]:hover{
-        background:#0F5DC0;
-      }
+      .stButton > button[kind="primary"]:hover{ background:#0F5DC0; }
 
       /* Toggle row spacing */
       .hp-toggle-row label{margin-right:14px;}
 
       /* Two-pane: left list scrolls, right map fixed height; remove extra gaps */
       .hp-results-wrap { margin-top: 6px; }
-      .hp-results-left{
-        overflow: auto;
-        padding-right: 6px;
-      }
+      .hp-results-left{ overflow: auto; padding-right: 6px; }
 
       /* Reduce extra gaps in list cards */
       .hp-card h4, .hp-card h3, .hp-card h2{margin: 0 0 2px 0;}
@@ -127,7 +127,8 @@ def inject_theme():
       /* Tighten expanders slightly */
       details > summary { padding: 2px 0 !important; }
     </style>
-    """, unsafe_allow_html=True)
+    """, height=0)
+
 
 def render_brand_header(active_route: str):
     try:
@@ -1067,8 +1068,19 @@ def page_explore():
                 _store_results(features, lat, lon, tzname, loc_display=loc["display_name"],
                                windows_text=windows_text, notes=weather_notes)
 
-    # ======== RENDER TWO-PANE (aligned, no spacer above) ========
+       # ======== RENDER TWO-PANE (aligned, no spacer above) ========
+    # One-line context ABOVE the two columns so both start at the same vertical position
     bundle = _load_results()
+    ctx_bits = []
+    if bundle.get("loc_display"):
+        ctx_bits.append(bundle["loc_display"])
+    if bundle.get("windows_text"):
+        ctx_bits.append(f"Suggested times: {bundle['windows_text']}")
+    if bundle.get("tz"):
+        ctx_bits.append(f"TZ: {bundle['tz']}")
+    if ctx_bits:
+        st.caption(" • ".join(ctx_bits))
+
     feats_list = bundle["features"]
     center = bundle["center"] or {"lat": 43.661, "lon": -70.255}
     tzname = bundle.get("tz", "UTC")
@@ -1100,18 +1112,6 @@ def page_explore():
     # -------- LIST (left) --------
     with colL:
         st.markdown(f'<div class="hp-results-left" style="height:{MAP_H}px;">', unsafe_allow_html=True)
-
-        # Context bar INSIDE the left pane (avoids vertical gap above columns)
-        if bundle.get("loc_display") or bundle.get("windows_text"):
-            with st.expander("Context (location & weather)", expanded=False):
-                if bundle.get("loc_display"):
-                    st.caption(bundle["loc_display"])
-                st.caption(f"Timezone: {tzname}")
-                if bundle.get("windows_text"):
-                    st.caption("Suggested times today: " + bundle["windows_text"])
-                if bundle.get("weather_notes"):
-                    for n in bundle["weather_notes"]:
-                        st.text("• " + n)
 
         if not feats_list:
             st.markdown('<div class="hp-card">', unsafe_allow_html=True)
@@ -1146,7 +1146,7 @@ def page_explore():
                 st.markdown(" ".join(chips), unsafe_allow_html=True)
                 st.markdown('</div>', unsafe_allow_html=True)
 
-        st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)  # close scroll container
 
     # -------- MAP (right) --------
     with colR:
@@ -1154,7 +1154,10 @@ def page_explore():
             map_df = pd.DataFrame(feats_list)[["lat","lon","name","rank","distance_km","score"]].copy()
             for c in ["lat","lon","distance_km","score","rank"]:
                 map_df[c] = map_df[c].astype(float)
-            map_df["tooltip"] = map_df.apply(lambda rr: f"{int(rr['rank'])}. {rr['name']}\\n{rr['distance_km']:.2f} km — score {rr['score']:.0f}", axis=1)
+            map_df["tooltip"] = map_df.apply(
+                lambda rr: f"{int(rr['rank'])}. {rr['name']}\\n{rr['distance_km']:.2f} km — score {rr['score']:.0f}",
+                axis=1
+            )
         else:
             map_df = pd.DataFrame(columns=["lat","lon","name","rank","distance_km","score","tooltip"])
 
@@ -1188,6 +1191,7 @@ def page_explore():
         st.pydeck_chart(deck, use_container_width=True, height=MAP_H)
 
     st.markdown('</div>', unsafe_allow_html=True)  # end results wrap
+
 
 # =========================
 # AUTH + COMMUNITY + PROFILE (unchanged except HTML handling)
